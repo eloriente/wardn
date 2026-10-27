@@ -40,14 +40,14 @@ def format_trace(result: AgentResult) -> str:
     return "\n".join(lines)
 
 
-def ask(agent: Agent, question: str, quiet: bool) -> int:
-    """Answer one question. The answer goes to stdout, the trace to stderr."""
+def ask(agent: Agent, question: str, verbose: bool) -> int:
+    """Answer one question. The answer goes to stdout, the trace (if asked) to stderr."""
     try:
         result = agent.run(question)
     except OllamaError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    if not quiet and (trace := format_trace(result)):
+    if verbose and (trace := format_trace(result)):
         print(trace + "\n", file=sys.stderr)
     print(result.answer)
     if not result.finished:
@@ -55,7 +55,7 @@ def ask(agent: Agent, question: str, quiet: bool) -> int:
     return 0
 
 
-def chat(agent: Agent, quiet: bool) -> int:
+def chat(agent: Agent, verbose: bool) -> int:
     try:
         import readline  # noqa: F401  # line editing and history for input()
     except ImportError:
@@ -70,7 +70,7 @@ def chat(agent: Agent, quiet: bool) -> int:
         if question in ("exit", "quit"):
             return 0
         if question:
-            ask(agent, question, quiet)  # each question starts a fresh conversation
+            ask(agent, question, verbose)  # each question starts a fresh conversation
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -81,7 +81,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--target", help="server to inspect (see config.toml)")
     parser.add_argument("--model", help="Ollama model, overriding the config")
     parser.add_argument(
-        "-q", "--quiet", action="store_true", help="print only the answer"
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="also show the tools the agent used and what they returned",
     )
     commands = parser.add_subparsers(dest="command", required=True)
     ask_parser = commands.add_parser("ask", help="ask one question and exit")
@@ -101,5 +104,5 @@ def main(argv: list[str] | None = None) -> int:
 
     agent = build_agent(config, target, args.model or config.model)
     if args.command == "ask":
-        return ask(agent, " ".join(args.question), args.quiet)
-    return chat(agent, args.quiet)
+        return ask(agent, " ".join(args.question), args.verbose)
+    return chat(agent, args.verbose)

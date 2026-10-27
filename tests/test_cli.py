@@ -51,21 +51,22 @@ def test_format_trace_shows_tool_calls_and_results():
     assert trace == "[tool call] disk_usage({})\n[tool result]\n/: 50% used"
 
 
-def test_ask_prints_answer_to_stdout_and_trace_to_stderr(config_file, agent, capsys):
+def test_ask_prints_only_the_answer_by_default(config_file, agent, capsys):
     code = cli.main([*config_file, "ask", "how", "full", "are", "my", "disks?"])
     out, err = capsys.readouterr()
 
     assert code == 0
     assert agent.questions == ["how full are my disks?"]
     assert out == "Half full.\n"
-    assert "[tool call] disk_usage" in err
+    assert err == ""
 
 
-def test_quiet_hides_the_trace(config_file, agent, capsys):
-    cli.main([*config_file, "-q", "ask", "disks?"])
+def test_verbose_shows_the_trace_on_stderr(config_file, agent, capsys):
+    cli.main([*config_file, "-v", "ask", "disks?"])
     out, err = capsys.readouterr()
     assert out == "Half full.\n"
-    assert err == ""
+    assert "[tool call] disk_usage" in err
+    assert "[tool result]" in err
 
 
 def test_unfinished_run_exits_with_error_code(config_file, monkeypatch, capsys):
