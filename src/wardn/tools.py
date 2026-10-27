@@ -131,8 +131,10 @@ def _memory_usage(target: Target, arguments: dict[str, Any]) -> str:
         line += " WARNING: low memory"
 
     swap = rows.get("Swap", [])
-    if len(swap) >= 2 and swap[0].isdigit() and int(swap[0]) > 0:
-        line += f"\nSwap: {swap[1]} MB used of {swap[0]} MB"
+    if len(swap) >= 2 and swap[0].isdigit() and swap[1].isdigit() and int(swap[0]) > 0:
+        # Percentages are computed here: the model is unreliable at arithmetic.
+        percent = round(100 * int(swap[1]) / int(swap[0]))
+        line += f"\nSwap: {percent}% in use ({swap[1]} MB of {swap[0]} MB)"
     else:
         line += "\nSwap: none"
     return line
@@ -204,6 +206,49 @@ SERVICE_STATUS = Tool(
     func=_service_status,
 )
 
+MAX_DESCRIPTION_CHARS = 80
+
+
+def _failed_services(target: Target, arguments: dict[str, Any]) -> str:
+    result = target.run(
+        [
+            "systemctl",
+            "list-units",
+            "--failed",
+            "--no-pager",
+            "--plain",
+            "--no-legend",
+        ]
+    )
+    if result.exit_code != 0:
+        return f"error: systemctl failed (exit {result.exit_code}): {result.stderr.strip()[:200]}"
+
+    units = []
+    for raw in result.stdout.splitlines():
+        parts = raw.lstrip("●* ").split(None, 4)  # unit load active sub description
+        if len(parts) >= 4:
+            description = parts[4][:MAX_DESCRIPTION_CHARS] if len(parts) == 5 else ""
+            units.append(f"  {parts[0]}" + (f" ({description})" if description else ""))
+
+    if not units:
+        return "no failed systemd services"
+    if len(units) > MAX_LINES:
+        extra = len(units) - MAX_LINES
+        units = units[:MAX_LINES] + [f"  ... {extra} more not shown"]
+    return f"{len(units)} failed systemd services:\n" + "\n".join(units)
+
+
+FAILED_SERVICES = Tool(
+    name="failed_services",
+    description=(
+        "List the systemd services of the host that have failed. "
+        "Use it to check whether anything is broken."
+    ),
+    properties={},
+    required=(),
+    func=_failed_services,
+)
+
 EXIT_CODE = re.compile(r"Exited \((\d+)\)")
 
 
@@ -257,4 +302,10 @@ CONTAINER_STATUS = Tool(
     func=_container_status,
 )
 
-ALL_TOOLS = (DISK_USAGE, MEMORY_USAGE, SERVICE_STATUS, CONTAINER_STATUS)
+ALL_TOOLS = (
+    DISK_USAGE,
+    MEMORY_USAGE,
+    SERVICE_STATUS,
+    FAILED_SERVICES,
+    CONTAINER_STATUS,
+)

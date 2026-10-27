@@ -51,3 +51,15 @@ def test_fake_docker_ps_runs_in_sandbox(target):
     result = target.run(["docker", "ps", "-a", "--format", "{{json .}}"])
     assert result.exit_code == 0
     assert '"Names":"plex"' in result.stdout
+
+
+def test_failed_services_runs_in_sandbox(target):
+    command = [
+        "systemctl",
+        "list-units",
+        "--failed",
+        "--no-pager",
+        "--plain",
+        "--no-legend",
+    ]
+    assert target.run(command).exit_code == 0

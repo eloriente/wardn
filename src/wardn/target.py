@@ -114,4 +114,14 @@ DEFAULT_RULES = (
     Rule(("free", "-m")),
     Rule(("docker", "ps", "-a", "--format", "{{json .}}")),
     Rule(("systemctl", "status", UNIT, "--no-pager")),
+    Rule(
+        (
+            "systemctl",
+            "list-units",
+            "--failed",
+            "--no-pager",
+            "--plain",
+            "--no-legend",
+        )
+    ),
 )

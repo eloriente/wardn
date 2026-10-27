@@ -7,6 +7,7 @@ from wardn.target import CommandTimeout
 from wardn.tools import (
     CONTAINER_STATUS,
     DISK_USAGE,
+    FAILED_SERVICES,
     LOG_LINES,
     MAX_LINES,
     MEMORY_USAGE,
@@ -103,9 +104,21 @@ def test_memory_usage_summary(target):
     target.stdout = SANDBOX_FREE
     output = MEMORY_USAGE.call(target, {})
     assert output == (
-        "RAM: 6% in use (502 MB of 7834 MB), 7332 MB available\nSwap: 0 MB used of 1023 MB"
+        "RAM: 6% in use (502 MB of 7834 MB), 7332 MB available\nSwap: 0% in use (0 MB of 1023 MB)"
     )
     assert target.executed == [["free", "-m"]]
+
+
+def test_swap_percentage_is_computed(target):
+    # Real output from the homelab host: 2435 / 8191 is 29.7%, rounded to 30%.
+    target.stdout = (
+        "total used free shared buff/cache available\n"
+        "Mem: 15858 6955 4000 100 5000 8903\n"
+        "Swap: 8191 2435 5756\n"
+    )
+    assert MEMORY_USAGE.call(target, {}).endswith(
+        "Swap: 30% in use (2435 MB of 8191 MB)"
+    )
 
 
 def test_memory_usage_without_swap(target):
@@ -277,3 +290,52 @@ def test_docker_failure_is_reported_as_text(target):
     assert (
         output == "error: docker failed (exit 1): Cannot connect to the Docker daemon"
     )
+
+
+FAILED_COMMAND = [
+    "systemctl",
+    "list-units",
+    "--failed",
+    "--no-pager",
+    "--plain",
+    "--no-legend",
+]
+
+
+def test_failed_services_lists_units(target):
+    target.stdout = (
+        "pvedaemon.service loaded failed failed PVE API Daemon\n"
+        "● backup.service loaded failed failed Nightly backup\n"
+    )
+    assert FAILED_SERVICES.call(target, {}) == (
+        "2 failed systemd services:\n"
+        "  pvedaemon.service (PVE API Daemon)\n"
+        "  backup.service (Nightly backup)"
+    )
+    assert target.executed == [FAILED_COMMAND]
+
+
+def test_no_failed_services(target):
+    target.stdout = ""
+    assert FAILED_SERVICES.call(target, {}) == "no failed systemd services"
+
+
+def test_failed_services_truncates_long_descriptions_and_lists(target):
+    rows = "".join(
+        f"u{i}.service loaded failed failed {'x' * 200}\n" for i in range(MAX_LINES + 3)
+    )
+    target.stdout = rows
+    lines = FAILED_SERVICES.call(target, {}).splitlines()
+    assert lines[1] == f"  u0.service ({'x' * 80})"
+    assert lines[-1] == "  ... 3 more not shown"
+
+
+def test_failed_services_rejects_arguments(target):
+    assert FAILED_SERVICES.call(target, {"unit": "x"}).startswith("error: invalid")
+    assert target.executed == []
+
+
+def test_failed_services_failure_is_reported_as_text(target):
+    target.exit_code = 1
+    target.stderr = "boom"
+    assert FAILED_SERVICES.call(target, {}) == "error: systemctl failed (exit 1): boom"
