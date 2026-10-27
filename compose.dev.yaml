@@ -1,0 +1,16 @@
+services:
+  sandbox:
+    build:
+      context: ./sandbox
+      args:
+        SSH_PUBKEY: ${WARDN_SSH_PUBKEY:?set WARDN_SSH_PUBKEY to your public key}
+    # Documented exception: systemd needs privileged mode to run inside a
+    # container. Dev sandbox only, never in prod.
+    privileged: true
+    cgroup: host
+    tmpfs:
+      - /run
+      - /run/lock
+      - /tmp
+    ports:
+      - "127.0.0.1:2222:22"
