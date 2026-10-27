@@ -1,0 +1,35 @@
+# systemd unit for the Telegram bot, to run in the Wardn LXC as the "wardn" user.
+#
+# Install as root, inside the LXC:
+#   install -m 644 deploy/wardn-bot.service /etc/systemd/system/wardn-bot.service
+#   systemctl daemon-reload && systemctl enable --now wardn-bot
+# Logs: journalctl -u wardn-bot -f
+#
+# Only one bot may poll a token at a time: stop `wardn bot` anywhere else first.
+
+[Unit]
+Description=Wardn Telegram bot
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+User=wardn
+WorkingDirectory=/home/wardn/wardn
+# The installed script, so nothing is synced or written at start-up.
+ExecStart=/home/wardn/wardn/.venv/bin/wardn --target homelab bot
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=10
+
+# It only reads, and writes the audit log: shut the rest.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/wardn/.local/state/wardn
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
