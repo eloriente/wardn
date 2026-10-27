@@ -7,6 +7,9 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
+# Runtime output (audit log)
+logs/
+
 # Secrets (never commit keys or credentials)
 .env
 .env.*
