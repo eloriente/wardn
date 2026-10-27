@@ -10,9 +10,14 @@ class FakeTarget(Target):
         super().__init__(Allowlist(DEFAULT_RULES), self.audit)
         self.executed = []
         self.raises = None
+        self.stdout = "ok"
+        self.stderr = ""
+        self.exit_code = 0
 
     def _execute(self, argv):
         if self.raises:
             raise self.raises
         self.executed.append(list(argv))
-        return CommandResult(stdout="ok", stderr="", exit_code=0)
+        return CommandResult(
+            stdout=self.stdout, stderr=self.stderr, exit_code=self.exit_code
+        )
