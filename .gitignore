@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+
+# Secrets (never commit keys or credentials)
+.env
+.env.*
+*.pem
+id_*
+
+# macOS
+.DS_Store
