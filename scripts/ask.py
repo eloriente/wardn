@@ -4,7 +4,12 @@
     WARDN_SSH_KEY=~/.ssh/wardn_sandbox PYTHONPATH=src \
         uv run python scripts/ask.py "How full are my disks?"
 
-Set WARDN_MODEL to try another model (default: qwen3:4b-instruct).
+Optional environment variables:
+    WARDN_MODEL      model to use (default: qwen3:4b-instruct)
+    WARDN_SSH_HOST   host to inspect (default: 127.0.0.1, the sandbox)
+    WARDN_SSH_PORT   ssh port (default: 2222, the sandbox)
+    WARDN_SSH_USER   ssh user (default: wardn)
+    WARDN_TOOLS      comma-separated tool names (default: all)
 Every command attempt is appended to logs/audit.jsonl.
 """
 
@@ -23,17 +28,26 @@ question = " ".join(sys.argv[1:]) or "How full are my disks?"
 model = os.environ.get("WARDN_MODEL", "qwen3:4b-instruct")
 key = os.environ.get("WARDN_SSH_KEY")
 if not key:
-    sys.exit("Set WARDN_SSH_KEY to the sandbox private key.")
+    sys.exit("Set WARDN_SSH_KEY to the private key to use.")
+
+tools = ALL_TOOLS
+if wanted := os.environ.get("WARDN_TOOLS"):
+    names = [name.strip() for name in wanted.split(",")]
+    tools = tuple(tool for tool in ALL_TOOLS if tool.name in names)
+    if len(tools) != len(names):
+        sys.exit(
+            f"Unknown tool in WARDN_TOOLS. Available: {[t.name for t in ALL_TOOLS]}"
+        )
 
 target = SSHTarget(
     Allowlist(DEFAULT_RULES),
     JsonlAuditLog(Path("logs/audit.jsonl")),
-    host="127.0.0.1",
-    user="wardn",
+    host=os.environ.get("WARDN_SSH_HOST", "127.0.0.1"),
+    user=os.environ.get("WARDN_SSH_USER", "wardn"),
     key_path=Path(key).expanduser(),
-    port=2222,
+    port=int(os.environ.get("WARDN_SSH_PORT", "2222")),
 )
-agent = Agent(OllamaClient(model), target, ALL_TOOLS)
+agent = Agent(OllamaClient(model), target, tools)
 result = agent.run(question)
 
 print(f"model: {model}\n")
