@@ -45,3 +45,9 @@ def test_systemctl_status_runs_in_sandbox(target):
 def test_disallowed_command_is_blocked_before_ssh(target):
     with pytest.raises(CommandNotAllowed):
         target.run(["cat", "/etc/passwd"])
+
+
+def test_fake_docker_ps_runs_in_sandbox(target):
+    result = target.run(["docker", "ps", "-a", "--format", "{{json .}}"])
+    assert result.exit_code == 0
+    assert '"Names":"plex"' in result.stdout

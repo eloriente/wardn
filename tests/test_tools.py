@@ -1,8 +1,11 @@
+from pathlib import Path
+
 import pytest
 from fakes import FakeTarget
 
 from wardn.target import CommandTimeout
 from wardn.tools import (
+    CONTAINER_STATUS,
     DISK_USAGE,
     LOG_LINES,
     MAX_LINES,
@@ -218,4 +221,59 @@ def test_systemctl_failure_is_reported_as_text(target):
     target.stderr = "boom"
     assert SERVICE_STATUS.call(target, {"unit": "ssh"}).startswith(
         "error: systemctl failed (exit 1)"
+    )
+
+
+# Same content as sandbox/fake/docker-ps.jsonl.
+SANDBOX_DOCKER_PS = (
+    Path(__file__).parent.parent / "sandbox/fake/docker-ps.jsonl"
+).read_text()
+DOCKER_COMMAND = ["docker", "ps", "-a", "--format", "{{json .}}"]
+
+
+def test_container_status_lists_problems_first(target):
+    target.stdout = SANDBOX_DOCKER_PS
+    lines = CONTAINER_STATUS.call(target, {}).splitlines()
+
+    assert lines[0] == "radarr: restarting (Restarting (1) 12 seconds ago) WARNING"
+    assert "plex: running (Up 3 days (healthy))" in lines
+    assert (
+        "old-backup: exited (Exited (0) 2 weeks ago)" in lines
+    )  # a clean exit is fine
+    assert target.executed == [DOCKER_COMMAND]
+
+
+def test_unhealthy_and_crashed_containers_are_flagged(target):
+    target.stdout = (
+        '{"Names":"a","State":"running","Status":"Up 1 hour (unhealthy)"}\n'
+        '{"Names":"b","State":"exited","Status":"Exited (137) 5 minutes ago"}\n'
+    )
+    lines = CONTAINER_STATUS.call(target, {}).splitlines()
+    assert lines == [
+        "a: running (Up 1 hour (unhealthy)) WARNING: unhealthy",
+        "b: exited (Exited (137) 5 minutes ago) WARNING: exited with an error",
+    ]
+
+
+def test_container_status_skips_garbage_lines(target):
+    target.stdout = 'not json\n[1, 2]\n{"Names":"a","State":"running","Status":"Up"}\n'
+    assert CONTAINER_STATUS.call(target, {}) == "a: running (Up)"
+
+
+def test_no_containers(target):
+    target.stdout = ""
+    assert CONTAINER_STATUS.call(target, {}) == "no containers found"
+
+
+def test_container_status_rejects_arguments(target):
+    assert CONTAINER_STATUS.call(target, {"all": True}).startswith("error: invalid")
+    assert target.executed == []
+
+
+def test_docker_failure_is_reported_as_text(target):
+    target.exit_code = 1
+    target.stderr = "Cannot connect to the Docker daemon"
+    output = CONTAINER_STATUS.call(target, {})
+    assert (
+        output == "error: docker failed (exit 1): Cannot connect to the Docker daemon"
     )

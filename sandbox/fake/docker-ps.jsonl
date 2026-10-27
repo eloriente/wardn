@@ -1,0 +1,4 @@
+{"Names":"plex","Image":"plexinc/pms-docker:latest","State":"running","Status":"Up 3 days (healthy)"}
+{"Names":"sonarr","Image":"lscr.io/linuxserver/sonarr:latest","State":"running","Status":"Up 3 days"}
+{"Names":"radarr","Image":"lscr.io/linuxserver/radarr:latest","State":"restarting","Status":"Restarting (1) 12 seconds ago"}
+{"Names":"old-backup","Image":"restic/restic:latest","State":"exited","Status":"Exited (0) 2 weeks ago"}

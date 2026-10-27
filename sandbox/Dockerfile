@@ -25,6 +25,11 @@ RUN mkdir -p /run/sshd \
     && printf 'PasswordAuthentication no\nPermitRootLogin no\n' > /etc/ssh/sshd_config.d/wardn.conf \
     && systemctl enable ssh
 
+# Fake docker, so container tools can be developed without real containers.
+COPY fake/docker /usr/local/bin/docker
+COPY fake/docker-ps.jsonl /etc/wardn-fake/docker-ps.jsonl
+RUN chmod 755 /usr/local/bin/docker
+
 EXPOSE 22
 
 # systemd must be PID 1; SIGRTMIN+3 is its clean-shutdown signal.

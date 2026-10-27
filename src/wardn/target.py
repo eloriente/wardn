@@ -112,5 +112,6 @@ UNIT = re.compile(r"[A-Za-z0-9][A-Za-z0-9@._-]*\.service")
 DEFAULT_RULES = (
     Rule(("df", "-h")),
     Rule(("free", "-m")),
+    Rule(("docker", "ps", "-a", "--format", "{{json .}}")),
     Rule(("systemctl", "status", UNIT, "--no-pager")),
 )

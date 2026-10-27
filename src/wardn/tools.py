@@ -5,6 +5,7 @@ function that uses a Target. Tools never run anything themselves, and their
 output is short on purpose: the model is small.
 """
 
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -189,7 +190,10 @@ def _service_status(target: Target, arguments: dict[str, Any]) -> str:
 
 SERVICE_STATUS = Tool(
     name="service_status",
-    description="Show whether a systemd service is running, and its recent log lines.",
+    description=(
+        "Show whether a systemd service of the host is running, and its recent "
+        "log lines. Not for Docker containers."
+    ),
     properties={
         "unit": {
             "type": "string",
@@ -200,4 +204,57 @@ SERVICE_STATUS = Tool(
     func=_service_status,
 )
 
-ALL_TOOLS = (DISK_USAGE, MEMORY_USAGE, SERVICE_STATUS)
+EXIT_CODE = re.compile(r"Exited \((\d+)\)")
+
+
+def _container_line(container: dict[str, Any]) -> str:
+    name = container.get("Names", "?")
+    state = container.get("State", "?")
+    status = container.get("Status", "")
+    line = f"{name}: {state} ({status})"
+
+    exit_code = EXIT_CODE.search(status)
+    if state in ("restarting", "dead", "paused"):
+        line += " WARNING"
+    elif "(unhealthy)" in status:
+        line += " WARNING: unhealthy"
+    elif exit_code and exit_code.group(1) != "0":
+        line += " WARNING: exited with an error"
+    return line
+
+
+def _container_status(target: Target, arguments: dict[str, Any]) -> str:
+    result = target.run(["docker", "ps", "-a", "--format", "{{json .}}"])
+    if result.exit_code != 0:
+        return f"error: docker failed (exit {result.exit_code}): {result.stderr.strip()[:200]}"
+
+    lines = []
+    for raw in result.stdout.splitlines():
+        try:
+            container = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(container, dict):
+            lines.append(_container_line(container))
+
+    if not lines:
+        return "no containers found"
+    lines.sort(key=lambda line: "WARNING" in line, reverse=True)  # problems first
+    if len(lines) > MAX_LINES:
+        extra = len(lines) - MAX_LINES
+        lines = lines[:MAX_LINES] + [f"... {extra} more not shown"]
+    return "\n".join(lines)
+
+
+CONTAINER_STATUS = Tool(
+    name="container_status",
+    description=(
+        "List the Docker containers on the server (apps such as Plex or Sonarr "
+        "usually run as containers) and whether each one is running."
+    ),
+    properties={},
+    required=(),
+    func=_container_status,
+)
+
+ALL_TOOLS = (DISK_USAGE, MEMORY_USAGE, SERVICE_STATUS, CONTAINER_STATUS)
