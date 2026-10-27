@@ -334,7 +334,7 @@ def test_bot_ask_runs_the_agent(bot_commands):
     sent = []
     commands["/ask"]("how full?", sent.append)
     assert agent.questions == ["how full?"]
-    assert sent == ["Half full."]
+    assert sent == ["Thinking...", "Half full."]  # the notice comes first
 
 
 def test_bot_ask_without_a_question_shows_the_usage(bot_commands):
@@ -352,7 +352,7 @@ def test_bot_ask_keeps_the_model_error_out_of_the_chat_but_in_the_audit_log(
     sent = []
     commands["/ask"]("q", sent.append)
 
-    assert sent == ["The model did not answer."]
+    assert sent == ["Thinking...", "The model did not answer."]
     (event,) = audit.events
     assert event["command"] == "/ask"
     assert event["error"] == "OllamaError: cannot reach http://10.0.0.5:11434"
@@ -414,3 +414,20 @@ def test_bot_stops_when_telegram_refuses_the_token(tmp_path, monkeypatch, capsys
 
     assert cli.main(["--config", str(path), "bot"]) == 2
     assert "refused the token" in capsys.readouterr().err
+
+
+def test_bot_texts_follow_the_configured_language(tmp_path):
+    from wardn.audit import MemoryAuditLog
+    from wardn.config import load_config
+
+    path = tmp_path / "config.toml"
+    path.write_text('language = "Spanish"\n' + BOT_CONFIG)
+    path.chmod(0o600)
+    commands = cli.bot_commands(
+        load_config(path), FakeAgent(), [], "m", MemoryAuditLog()
+    )
+    sent = []
+    commands["/ask"]("¿discos?", sent.append)
+    commands["/ask"]("", sent.append)
+
+    assert sent == ["Pensando...", "Half full.", "Uso: /ask <pregunta>"]

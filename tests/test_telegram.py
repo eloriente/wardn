@@ -259,3 +259,10 @@ def test_whoami_fails_clearly_with_a_bad_token():
     api = lambda request: httpx.Response(401, json={"ok": False})
     with pytest.raises(TelegramError, match="refused the token"):
         make_client(api).whoami()
+
+
+def test_the_help_text_can_be_replaced():
+    api = FakeTelegram(message(1, "/help"))
+    bot = Bot(make_client(api), (7,), {}, MemoryAuditLog(), help_text="Ayuda")
+    bot.poll()
+    assert api.sent == [(7, "Ayuda")]

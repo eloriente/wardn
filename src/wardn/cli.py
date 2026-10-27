@@ -41,6 +41,7 @@ from wardn.telegram import (
     TelegramClient,
     TelegramError,
 )
+from wardn.texts import bot_texts
 from wardn.tools import ALL_TOOLS, Tool, guest_status_tool
 
 
@@ -283,6 +284,7 @@ def bot_commands(
     text could hold an address, and it would travel through Telegram. It goes to the
     audit log instead."""
     client = OllamaClient(model, base_url=config.ollama_url)
+    texts = bot_texts(config.language)
 
     def failed(command: str, exc: Exception) -> None:
         audit.record(
@@ -295,31 +297,32 @@ def bot_commands(
         )
 
     def status(_args: str, reply: Reply) -> None:
-        reply("Checking the homelab...")
+        reply(texts.checking)
         reports, redactor = gather_reports(config, targets, audit)
         reply(f"{format_attention(reports)}\n\n{format_checked(reports)}")
         try:
             reply(
-                "Summary:\n"
+                f"{texts.summary}\n"
                 + write_digest(client, reports, redactor, audit, config.language)
             )
         except OllamaError as exc:
             failed("/status", exc)
-            reply("The summary is unavailable: the model did not answer.")
+            reply(texts.summary_unavailable)
 
     def ask_agent(question: str, reply: Reply) -> None:
         if not question:
-            reply("Usage: /ask <question>")
+            reply(texts.usage)
             return
+        reply(texts.thinking)
         try:
             result = agent.run(question[:MAX_QUESTION_CHARS])
         except OllamaError as exc:
             failed("/ask", exc)
-            reply("The model did not answer.")
+            reply(texts.no_answer)
             return
-        reply(result.answer or "The model gave no answer.")
+        reply(result.answer or texts.empty_answer)
         if not result.finished:
-            reply("I did not manage to finish: that was as far as I got.")
+            reply(texts.unfinished)
 
     return {"/status": status, "/ask": ask_agent}
 
@@ -350,6 +353,7 @@ def run_bot(args: argparse.Namespace) -> int:
         config.telegram.allowed_users,
         bot_commands(config, agent, targets, model, audit),
         audit,
+        help_text=bot_texts(config.language).help,
     )
     print(
         f"Wardn bot {username} running; /ask uses {target.name!r}. Ctrl-C to stop.\n"

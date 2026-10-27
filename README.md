@@ -97,7 +97,7 @@ Accept each host key once by hand (`ssh -i <key> wardn@<host> true`): Wardn conn
 | `wardn bot` | Answer `/status` and `/ask` in Telegram, to the allowed users only |
 | `wardn eval [--runs N] [scenario ...]` | Run the eval scenarios and report the pass rate |
 
-Global options: `--config`, `--target`, `--model`, and `-v` to also show the tools the agent used and what they returned. Set `language = "Spanish"` (or any language) in the config to have the model answer in it.
+Global options: `--config`, `--target`, `--model`, and `-v` to also show the tools the agent used and what they returned. Set `language = "Spanish"` (or any language) in the config to have the model answer in it; with Spanish, the bot's own messages ("Pensando...") are translated too.
 
 ## Tools
 
@@ -169,7 +169,7 @@ Layout of `src/wardn`:
 - It only reads. It cannot restart a service or change anything, by design.
 - Redaction is best effort: treat it as a layer, not a guarantee.
 - A 4B model on a CPU is slow (seconds to a minute per answer) and can still pick the wrong tool; that is what the evals measure.
-- `/ask` talks to a single target, and fixed texts (for example "Needs attention:") are always in English.
+- `/ask` talks to a single target, and the lists of problems ("Needs attention:") are always in English.
 
 ## License
 

@@ -169,3 +169,13 @@ def test_a_long_report_is_cut_at_the_end_so_the_problems_survive():
     assert len(prompt) < MAX_REPORT_CHARS + 50
     assert "a: x: restarting WARNING" in prompt
     assert prompt.endswith("... (report cut)")
+
+
+def test_bot_texts_default_to_english_and_know_spanish():
+    from wardn.texts import ENGLISH, SPANISH, bot_texts
+
+    assert bot_texts(None) is ENGLISH
+    assert bot_texts("German") is ENGLISH
+    for name in ("Spanish", "spanish", "Español", "castellano"):
+        assert bot_texts(name) is SPANISH
+    assert SPANISH.thinking == "Pensando..."

@@ -21,18 +21,14 @@ from typing import Any
 import httpx
 
 from wardn.audit import AuditLog, timestamp
+from wardn.texts import ENGLISH
 
 API_URL = "https://api.telegram.org"
 TOKEN = re.compile(r"\d+:[A-Za-z0-9_-]{20,}")  # 123456:ABC-def...
 MAX_MESSAGE_CHARS = 4000  # Telegram refuses more than 4096
 MAX_BACKOFF_SECONDS = 60
 
-HELP = (
-    "Wardn commands:\n"
-    "/status - what needs attention in the homelab, and a short summary\n"
-    "/ask <question> - ask the agent about the server\n"
-    "/help - this message"
-)
+HELP = ENGLISH.help
 
 
 class TelegramError(Exception):
@@ -161,7 +157,9 @@ class Bot:
         allowed_users: Collection[int],
         commands: Mapping[str, Handler],
         audit: AuditLog,
+        help_text: str = HELP,
     ):
+        self._help = help_text
         self._client = client
         self._allowed = frozenset(allowed_users)
         self._commands = dict(commands)
@@ -206,7 +204,7 @@ class Bot:
 
         handler = self._commands.get(command)
         if handler is None:
-            reply(HELP)
+            reply(self._help)
             return
         try:
             handler(rest.strip(), reply)
