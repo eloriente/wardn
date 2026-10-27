@@ -1,0 +1,20 @@
+# Copy to ~/.config/wardn/config.toml and edit.
+# This file holds no secrets: only the path to each SSH key.
+
+model = "qwen3:4b-instruct"
+# ollama_url = "http://localhost:11434"
+# audit_log = "~/.local/state/wardn/audit.jsonl"
+default_target = "sandbox"
+
+[targets.sandbox]
+host = "127.0.0.1"
+port = 2222
+user = "wardn"
+key = "~/.ssh/wardn_sandbox"
+
+[targets.homelab]
+host = "192.168.1.10"
+user = "wardn"
+key = "~/.ssh/wardn_homelab"
+# Leave out `tools` to enable all of them.
+tools = ["disk_usage", "memory_usage", "service_status", "failed_services"]
