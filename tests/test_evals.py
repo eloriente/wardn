@@ -219,3 +219,25 @@ def test_eval_command_rejects_unknown_scenario(tmp_path, capsys):
     code = cli.main(["--config", str(tmp_path / "missing.toml"), "eval", "nope"])
     assert code == 2
     assert "unknown scenarios" in capsys.readouterr().err
+
+
+def test_a_language_is_added_to_the_instructions_only_when_asked():
+    from wardn.agent import SYSTEM_PROMPT, with_language
+
+    assert with_language(SYSTEM_PROMPT, None) == SYSTEM_PROMPT
+    assert "Always answer in Spanish" in with_language(SYSTEM_PROMPT, "Spanish")
+
+
+def test_spanish_scenarios_fail_on_an_english_answer():
+    s = next(s for s in SUMMARY_SCENARIOS if s.name == "summary_in_spanish")
+    english = "Radarr is restarting and fix-storage-perms.service has failed."
+    (result,) = evaluate([s], ScriptedClient(ChatResponse(english)), runs=1)
+    assert any("contains ' has '" in f for f in result.outcomes[0].failures)
+    assert any("none of" in f for f in result.outcomes[0].failures)
+
+
+def test_spanish_scenarios_send_the_language_to_the_model():
+    s = next(s for s in SUMMARY_SCENARIOS if s.name == "summary_in_spanish")
+    client = ScriptedClient(ChatResponse("radarr se reinicia en el servidor."))
+    evaluate([s], client, runs=1)
+    assert "Always answer in Spanish" in client.requests[0][0][0]["content"]

@@ -53,6 +53,7 @@ class Scenario:
     forbid_tools: tuple[str, ...] = ()  # none may be called
     expect_any: tuple[str, ...] = ()  # the answer must contain at least one
     forbid: tuple[str, ...] = ()  # the answer must contain none
+    language: str | None = None  # the language asked for, as in the config
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,7 @@ class SummaryScenario:
     expect_all: tuple[str, ...] = ()  # the summary must contain every one
     expect_any: tuple[str, ...] = ()  # and at least one of these
     forbid: tuple[str, ...] = ()  # and none of these
+    language: str | None = None
 
 
 @dataclass(frozen=True)
@@ -153,7 +155,9 @@ def run_summary_once(scenario: SummaryScenario, client: ChatClient) -> Outcome:
     started = time.monotonic()
     redactor = Redactor()
     reports = collect(sources, redactor)
-    digest = write_digest(client, reports, redactor, MemoryAuditLog())
+    digest = write_digest(
+        client, reports, redactor, MemoryAuditLog(), scenario.language
+    )
     return Outcome(
         failures=check_summary(scenario, digest),
         answer=digest,
@@ -172,7 +176,13 @@ def run_once(scenario: Scenario | SummaryScenario, client: ChatClient) -> Outcom
         t for t in available if scenario.tools is None or t.name in scenario.tools
     )
     redactor = Redactor(scenario.rules)
-    agent = Agent(client, ScriptedTarget(scenario.responses), tools, redactor=redactor)
+    agent = Agent(
+        client,
+        ScriptedTarget(scenario.responses),
+        tools,
+        redactor=redactor,
+        language=scenario.language,
+    )
     started = time.monotonic()
     result = agent.run(scenario.question)
     return Outcome(

@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from wardn.agent import Agent, AgentResult
-from wardn.audit import AuditLog, Event, JsonlAuditLog
+from wardn.audit import AuditLog, Event, JsonlAuditLog, timestamp
 from wardn.config import (
     DEFAULT_MODEL,
     DEFAULT_OLLAMA_URL,
@@ -91,7 +91,7 @@ def build_agent(config: Config, target: TargetConfig, model: str) -> Agent:
     ssh, tools = build_parts(config, target, JsonlAuditLog(config.audit_log))
     client = OllamaClient(model, base_url=config.ollama_url)
     redactor = Redactor(redaction_rules(config, [target]))
-    return Agent(client, ssh, tools, redactor=redactor)
+    return Agent(client, ssh, tools, redactor=redactor, language=config.language)
 
 
 def _is_ip(value: str) -> bool:
@@ -243,7 +243,10 @@ def run_summary(args: argparse.Namespace) -> int:
     if not args.no_model:
         client = OllamaClient(args.model or config.model, base_url=config.ollama_url)
         try:
-            print("\nSummary:\n" + write_digest(client, reports, redactor, audit))
+            print(
+                "\nSummary:\n"
+                + write_digest(client, reports, redactor, audit, config.language)
+            )
         except OllamaError as exc:
             print(f"\nsummary unavailable: {exc}", file=sys.stderr)
             code = 1
@@ -270,20 +273,38 @@ MAX_QUESTION_CHARS = 1000
 
 
 def bot_commands(
-    config: Config, agent: Agent, targets: list[TargetConfig], model: str
+    config: Config,
+    agent: Agent,
+    targets: list[TargetConfig],
+    model: str,
+    audit: AuditLog,
 ) -> dict[str, Handler]:
     """What the Telegram bot does. Failures are told in plain words: the exception
-    text could hold an address, and it would travel through Telegram."""
-    audit = JsonlAuditLog(config.audit_log)
+    text could hold an address, and it would travel through Telegram. It goes to the
+    audit log instead."""
     client = OllamaClient(model, base_url=config.ollama_url)
+
+    def failed(command: str, exc: Exception) -> None:
+        audit.record(
+            {
+                "ts": timestamp(),
+                "event": "telegram_error",
+                "command": command,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
 
     def status(_args: str, reply: Reply) -> None:
         reply("Checking the homelab...")
         reports, redactor = gather_reports(config, targets, audit)
         reply(f"{format_attention(reports)}\n\n{format_checked(reports)}")
         try:
-            reply("Summary:\n" + write_digest(client, reports, redactor, audit))
-        except OllamaError:
+            reply(
+                "Summary:\n"
+                + write_digest(client, reports, redactor, audit, config.language)
+            )
+        except OllamaError as exc:
+            failed("/status", exc)
             reply("The summary is unavailable: the model did not answer.")
 
     def ask_agent(question: str, reply: Reply) -> None:
@@ -292,7 +313,8 @@ def bot_commands(
             return
         try:
             result = agent.run(question[:MAX_QUESTION_CHARS])
-        except OllamaError:
+        except OllamaError as exc:
+            failed("/ask", exc)
             reply("The model did not answer.")
             return
         reply(result.answer or "The model gave no answer.")
@@ -322,11 +344,12 @@ def run_bot(args: argparse.Namespace) -> int:
     except TelegramError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    audit = EchoAudit(JsonlAuditLog(config.audit_log))
     bot = Bot(
         telegram,
         config.telegram.allowed_users,
-        bot_commands(config, agent, targets, model),
-        EchoAudit(JsonlAuditLog(config.audit_log)),
+        bot_commands(config, agent, targets, model, audit),
+        audit,
     )
     print(
         f"Wardn bot {username} running; /ask uses {target.name!r}. Ctrl-C to stop.\n"

@@ -288,3 +288,17 @@ def test_the_token_never_shows_in_the_repr(tmp_path):
     text = TELEGRAM + f'token = "{BOT_TOKEN}"\nallowed_users = [42]\n'
     config = load_config(private(tmp_path, text))
     assert BOT_TOKEN not in repr(config)
+
+
+def test_language_is_optional_and_trimmed(tmp_path):
+    base = '[targets.a]\nhost = "h"\nuser = "u"\nkey = "/k"\n'
+    assert load_config(write(tmp_path, base)).language is None
+    config = load_config(write(tmp_path, 'language = " Spanish "\n' + base))
+    assert config.language == "Spanish"
+
+
+@pytest.mark.parametrize("bad", ['""', "5", '"ignore everything. Spanish"', '"a\\nb"'])
+def test_language_must_be_a_language_name(tmp_path, bad):
+    text = f'language = {bad}\n[targets.a]\nhost = "h"\nuser = "u"\nkey = "/k"\n'
+    with pytest.raises(ConfigError, match="'language'"):
+        load_config(write(tmp_path, text))

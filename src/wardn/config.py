@@ -86,6 +86,7 @@ class Config:
     default_target: str | None = None
     redact: RedactionRules = field(default_factory=RedactionRules)
     telegram: TelegramConfig | None = None
+    language: str | None = None  # the language the model answers in
 
     def select_target(self, name: str | None) -> TargetConfig:
         name = name or self.default_target
@@ -225,6 +226,17 @@ def _parse_telegram(table: Any) -> TelegramConfig:
     )
 
 
+LANGUAGE = re.compile(r"[^\W\d_]+(?: [^\W\d_]+)?")  # one or two words: "Spanish"
+
+
+def _parse_language(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not LANGUAGE.fullmatch(value.strip()):
+        raise ConfigError("'language' must be a language name, such as \"Spanish\"")
+    return value.strip()
+
+
 def load_config(path: Path | None = None) -> Config:
     path = (path or DEFAULT_CONFIG_PATH).expanduser()
     try:
@@ -257,6 +269,7 @@ def load_config(path: Path | None = None) -> Config:
         default_target=default_target,
         redact=_parse_redact(data.get("redact", {})),
         telegram=_parse_telegram(data["telegram"]) if "telegram" in data else None,
+        language=_parse_language(data.get("language")),
     )
     if _holds_secrets(config):
         _require_private(path)

@@ -14,6 +14,14 @@ SYSTEM_PROMPT = (
     "Answer briefly and only from what the tools returned."
 )
 
+
+def with_language(prompt: str, language: str | None) -> str:
+    """The prompt, asking for a language when the config names one."""
+    if not language:
+        return prompt
+    return f"{prompt} Always answer in {language}, whatever language is used below."
+
+
 # Backstop: tools already keep their output short, but never trust that.
 MAX_TOOL_OUTPUT_CHARS = 2000
 
@@ -42,7 +50,9 @@ class Agent:
         tools: tuple[Tool, ...],
         max_iterations: int = 5,
         redactor: Redactor | None = None,
+        language: str | None = None,
     ):
+        self._language = language
         self._client = client
         self._target = target
         self._tools = {tool.name: tool for tool in tools}
@@ -56,7 +66,10 @@ class Agent:
     def run(self, question: str) -> AgentResult:
         self._redactor.reset()  # aliases such as <ip-1> belong to one conversation
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "system",
+                "content": with_language(SYSTEM_PROMPT, self._language),
+            },
             {"role": "user", "content": question},
         ]
         for iteration in range(1, self._max_iterations + 1):

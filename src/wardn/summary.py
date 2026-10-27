@@ -8,7 +8,7 @@ a short summary on top of it.
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
-from wardn.agent import ChatClient
+from wardn.agent import ChatClient, with_language
 from wardn.redact import Redactor, hide
 from wardn.target import Target
 from wardn.tools import Tool
@@ -132,7 +132,11 @@ def format_full(reports: Sequence[TargetReport]) -> str:
 
 
 def write_digest(
-    client: ChatClient, reports: Sequence[TargetReport], redactor: Redactor, audit
+    client: ChatClient,
+    reports: Sequence[TargetReport],
+    redactor: Redactor,
+    audit,
+    language: str | None = None,
 ) -> str:
     """The model's short summary. It reads the attention list, then the full report."""
     report = f"{format_attention(reports)}\n\n{format_full(reports)}"
@@ -140,7 +144,7 @@ def write_digest(
         report = report[:MAX_REPORT_CHARS] + "\n... (report cut)"
     response = client.chat(
         [
-            {"role": "system", "content": SUMMARY_PROMPT},
+            {"role": "system", "content": with_language(SUMMARY_PROMPT, language)},
             {"role": "user", "content": report},
         ]
     )

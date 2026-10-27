@@ -317,19 +317,20 @@ def test_bot_stops_on_a_token_that_cannot_be_read(tmp_path, capsys):
 
 @pytest.fixture
 def bot_commands(tmp_path, monkeypatch):
+    from wardn.audit import MemoryAuditLog
     from wardn.config import load_config
 
     path = tmp_path / "config.toml"
     path.write_text(BOT_CONFIG)
     config = load_config(path)
-    config = type(config)(**{**config.__dict__, "audit_log": tmp_path / "audit.jsonl"})
     agent = FakeAgent()
     targets = [config.targets["lab"]]
-    return cli.bot_commands(config, agent, targets, "m"), agent
+    audit = MemoryAuditLog()
+    return cli.bot_commands(config, agent, targets, "m", audit), agent, audit
 
 
 def test_bot_ask_runs_the_agent(bot_commands):
-    commands, agent = bot_commands
+    commands, agent, _ = bot_commands
     sent = []
     commands["/ask"]("how full?", sent.append)
     assert agent.questions == ["how full?"]
@@ -337,18 +338,24 @@ def test_bot_ask_runs_the_agent(bot_commands):
 
 
 def test_bot_ask_without_a_question_shows_the_usage(bot_commands):
-    commands, agent = bot_commands
+    commands, agent, _ = bot_commands
     sent = []
     commands["/ask"]("", sent.append)
     assert agent.questions == [] and sent == ["Usage: /ask <question>"]
 
 
-def test_bot_ask_does_not_pass_the_model_error_on(tmp_path, monkeypatch, bot_commands):
-    commands, agent = bot_commands
+def test_bot_ask_keeps_the_model_error_out_of_the_chat_but_in_the_audit_log(
+    bot_commands,
+):
+    commands, agent, audit = bot_commands
     agent._error = OllamaError("cannot reach http://10.0.0.5:11434")
     sent = []
     commands["/ask"]("q", sent.append)
+
     assert sent == ["The model did not answer."]
+    (event,) = audit.events
+    assert event["command"] == "/ask"
+    assert event["error"] == "OllamaError: cannot reach http://10.0.0.5:11434"
 
 
 def test_bot_status_sends_the_attention_list_even_if_the_model_is_down(
@@ -368,7 +375,7 @@ def test_bot_status_sends_the_attention_list_even_if_the_model_is_down(
 
     monkeypatch.setattr(cli, "build_parts", fake_parts)
     monkeypatch.setattr(cli, "write_digest", model_down)
-    commands, _ = bot_commands
+    commands, _, _ = bot_commands
     sent = []
     commands["/status"]("", sent.append)
 

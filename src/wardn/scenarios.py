@@ -6,6 +6,10 @@ from wardn.redact import RedactionRules
 from wardn.target import DOCKER_PS, CommandResult
 from wardn.tools import ALL_TOOLS
 
+# Words that only an English text has: a Spanish answer holds none of them.
+ENGLISH_WORDS = (" the ", " is ", " are ", " has ", " have ", " and ", " with ")
+SPANISH_WORDS = (" el ", " la ", " de ", " en ", " del ", " los ", " las ", " no ")
+
 DF = ("df", "-h")
 FREE = ("free", "-m")
 DOCKER = DOCKER_PS
@@ -302,6 +306,15 @@ SCENARIOS = (
         forbid=("not running", "isn't running", "not installed"),
     ),
     Scenario(
+        name="answers_in_spanish",
+        question="¿Cómo van los discos?",
+        responses={DF: out(HOST_DF_FULL)},
+        language="Spanish",
+        expect_tools=("disk_usage",),
+        expect_any=("97%",),
+        forbid=ENGLISH_WORDS,
+    ),
+    Scenario(
         name="spots_crashing_container",
         question="Is anything wrong with my containers?",
         responses={DOCKER: out(CONTAINERS)},
@@ -347,6 +360,14 @@ SUMMARY_SCENARIOS = (
         expect_all=("radarr", "fix-storage-perms"),
         # Consequences the report never states.
         forbid=("corruption", "data loss", "access issues", "mostly sufficient"),
+    ),
+    SummaryScenario(
+        name="summary_in_spanish",
+        targets={"homelab": homelab(failed=FAILED_ONE), "docker": docker(CONTAINERS)},
+        language="Spanish",
+        expect_all=("radarr", "fix-storage-perms"),
+        expect_any=SPANISH_WORDS,
+        forbid=ENGLISH_WORDS,
     ),
     SummaryScenario(
         name="summary_when_all_is_well",
