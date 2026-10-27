@@ -26,9 +26,12 @@ RUN mkdir -p /run/sshd \
     && systemctl enable ssh
 
 # Fake docker, so container tools can be developed without real containers.
-COPY fake/docker /usr/local/bin/docker
+COPY fake/docker /usr/bin/docker
 COPY fake/docker-ps.jsonl /etc/wardn-fake/docker-ps.jsonl
-RUN chmod 755 /usr/local/bin/docker
+RUN chmod 755 /usr/bin/docker \
+    && echo 'wardn ALL=(root) NOPASSWD: /usr/bin/docker ps -a --format {{json .}}' > /etc/sudoers.d/wardn-docker \
+    && chmod 440 /etc/sudoers.d/wardn-docker \
+    && visudo -cf /etc/sudoers.d/wardn-docker
 
 EXPOSE 22
 

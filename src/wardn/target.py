@@ -113,10 +113,26 @@ class Target(ABC):
 # read as an option (e.g. "--help").
 UNIT = re.compile(r"[A-Za-z0-9][A-Za-z0-9@._-]*\.service")
 
+# Read-only list of containers. It runs through sudo with these exact arguments,
+# so the user needs a sudoers entry for this one command, not the docker group
+# (which would be the same as root).
+DOCKER_PS = ("sudo", "-n", "/usr/bin/docker", "ps", "-a", "--format", "{{json .}}")
+
+LIST_RUNNING = (
+    "systemctl",
+    "list-units",
+    "--type=service",
+    "--state=running",
+    "--no-pager",
+    "--plain",
+    "--no-legend",
+)
+
 DEFAULT_RULES = (
     Rule(("df", "-h")),
     Rule(("free", "-m")),
-    Rule(("docker", "ps", "-a", "--format", "{{json .}}")),
+    Rule(DOCKER_PS),
+    Rule(LIST_RUNNING),
     Rule(("systemctl", "status", UNIT, "--no-pager")),
     Rule(
         (

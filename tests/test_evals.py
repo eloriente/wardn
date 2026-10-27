@@ -14,7 +14,7 @@ from wardn.evals import (
     tools_called,
 )
 from wardn.ollama import ChatResponse, ToolCall
-from wardn.scenarios import DF, SCENARIOS, out, select_scenarios
+from wardn.scenarios import DF, SCENARIOS, SUMMARY_SCENARIOS, out, select_scenarios
 from wardn.target import DEFAULT_RULES, Allowlist
 from wardn.tools import ALL_TOOLS
 
@@ -133,9 +133,14 @@ def test_scenario_names_are_unique():
     assert len(names) == len(set(names))
 
 
-@pytest.mark.parametrize("s", SCENARIOS, ids=lambda s: s.name)
+QUESTION_SCENARIOS = [s for s in SCENARIOS if isinstance(s, Scenario)]
+
+
+@pytest.mark.parametrize("s", QUESTION_SCENARIOS, ids=lambda s: s.name)
 def test_scenario_is_well_formed(s):
-    known_tools = {tool.name for tool in ALL_TOOLS}
+    known_tools = {tool.name for tool in ALL_TOOLS} | (
+        {"guest_status"} if s.guests is not None else set()
+    )
     named = set(s.expect_tools) | set(s.forbid_tools) | set(s.tools or ())
     assert named <= known_tools
     assert set(s.expect_tools) <= set(s.tools or known_tools)
@@ -144,6 +149,48 @@ def test_scenario_is_well_formed(s):
         allowlist.check(
             list(command)
         )  # a fixture for a command nobody can run is a typo
+
+
+@pytest.mark.parametrize("s", SUMMARY_SCENARIOS, ids=lambda s: s.name)
+def test_summary_scenario_is_well_formed(s):
+    known_tools = {tool.name for tool in ALL_TOOLS} | {"guest_status"}
+    allowlist = Allowlist(DEFAULT_RULES)
+    assert s.targets
+    assert s.expect_all or s.expect_any or s.forbid  # a scenario that checks nothing
+    for fixture in s.targets.values():
+        assert set(fixture.tools or ()) <= known_tools
+        for command in fixture.responses:
+            allowlist.check(list(command))
+
+
+def test_summary_scenario_runs_end_to_end_with_a_scripted_model():
+    s = next(s for s in SUMMARY_SCENARIOS if s.name == "summary_names_every_problem")
+    client = ScriptedClient(
+        ChatResponse("radarr keeps restarting and fix-storage-perms.service failed.")
+    )
+    (result,) = evaluate([s], client, runs=1)
+    assert result.passed == 1
+
+    prompt = client.requests[0][0][1]["content"]  # what the model was shown
+    assert prompt.startswith("Needs attention:")
+    assert "radarr" in prompt
+    assert "fix-storage-perms" in prompt
+
+
+def test_summary_scenario_fails_when_a_problem_is_not_mentioned():
+    s = next(s for s in SUMMARY_SCENARIOS if s.name == "summary_names_every_problem")
+    (result,) = evaluate([s], ScriptedClient(ChatResponse("All is fine.")), runs=1)
+    assert result.outcomes[0].failures == [
+        "summary lacks 'radarr'",
+        "summary lacks 'fix-storage-perms'",
+    ]
+
+
+def test_summary_scenario_fails_when_the_model_invents_consequences():
+    s = next(s for s in SUMMARY_SCENARIOS if s.name == "summary_names_every_problem")
+    answer = "radarr is restarting; fix-storage-perms failed, which could cause data corruption."
+    (result,) = evaluate([s], ScriptedClient(ChatResponse(answer)), runs=1)
+    assert result.outcomes[0].failures == ["summary contains 'corruption'"]
 
 
 def test_select_scenarios():

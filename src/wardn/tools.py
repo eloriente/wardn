@@ -11,7 +11,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from wardn.target import UNIT, CommandNotAllowed, CommandTimeout, Target
+from wardn.proxmox import Guest, GuestSource, ProxmoxError
+from wardn.target import (
+    DOCKER_PS,
+    LIST_RUNNING,
+    UNIT,
+    CommandNotAllowed,
+    CommandTimeout,
+    Target,
+)
 
 MAX_LINES = 20
 
@@ -170,7 +178,8 @@ def _service_status(target: Target, arguments: dict[str, Any]) -> str:
         # Say only what we know: a service may run outside systemd (a container).
         return (
             f"{unit}: no systemd unit with that name "
-            "(the service may run elsewhere, for example in a container)"
+            "(the service may run elsewhere, for example in a container; "
+            "or its name differs: list the running services to find the exact one)"
         )
 
     lines = [line.strip() for line in result.stdout.splitlines()]
@@ -249,6 +258,59 @@ FAILED_SERVICES = Tool(
     func=_failed_services,
 )
 
+
+def _running_services(target: Target, arguments: dict[str, Any]) -> str:
+    search = arguments.get("search", "")
+    if not isinstance(search, str):
+        return "error: search must be text, for example plex"
+    result = target.run(list(LIST_RUNNING))
+    if result.exit_code != 0:
+        return f"error: systemctl failed (exit {result.exit_code}): {result.stderr.strip()[:200]}"
+
+    services = []
+    for raw in result.stdout.splitlines():
+        parts = raw.lstrip("●* ").split(None, 4)  # unit load active sub description
+        if len(parts) >= 4:
+            description = parts[4][:MAX_DESCRIPTION_CHARS] if len(parts) == 5 else ""
+            services.append((parts[0], description))
+
+    needle = search.strip().lower()
+    if needle:
+        services = [
+            s for s in services if needle in s[0].lower() or needle in s[1].lower()
+        ]
+    if not services:
+        return (
+            f"no running services match {search!r}" if needle else "no running services"
+        )
+
+    lines = [f"  {unit} ({text})" if text else f"  {unit}" for unit, text in services]
+    if len(lines) > MAX_LINES:
+        extra = len(lines) - MAX_LINES
+        lines = lines[:MAX_LINES] + [
+            f"  ... {extra} more not shown: pass search to narrow it down"
+        ]
+    matching = f" matching {search!r}" if needle else ""
+    return f"{len(services)} running services{matching}:\n" + "\n".join(lines)
+
+
+RUNNING_SERVICES = Tool(
+    name="running_services",
+    description=(
+        "List the systemd services of the host that are running. Pass search to find "
+        "a service by part of its name, for example plex, since service_status needs "
+        "the exact name."
+    ),
+    properties={
+        "search": {
+            "type": "string",
+            "description": "Part of a service name or description, for example plex",
+        }
+    },
+    required=(),
+    func=_running_services,
+)
+
 EXIT_CODE = re.compile(r"Exited \((\d+)\)")
 
 
@@ -269,7 +331,7 @@ def _container_line(container: dict[str, Any]) -> str:
 
 
 def _container_status(target: Target, arguments: dict[str, Any]) -> str:
-    result = target.run(["docker", "ps", "-a", "--format", "{{json .}}"])
+    result = target.run(list(DOCKER_PS))
     if result.exit_code != 0:
         return f"error: docker failed (exit {result.exit_code}): {result.stderr.strip()[:200]}"
 
@@ -307,5 +369,85 @@ ALL_TOOLS = (
     MEMORY_USAGE,
     SERVICE_STATUS,
     FAILED_SERVICES,
+    RUNNING_SERVICES,
     CONTAINER_STATUS,
 )
+
+HIGH_USAGE_PERCENT = 90
+MIB = 1024 * 1024
+
+
+def _percent(used: int, total: int) -> int:
+    return round(100 * used / total) if total else 0
+
+
+def _duration(seconds: int) -> str:
+    days, rest = divmod(seconds, 86400)
+    hours, rest = divmod(rest, 3600)
+    if days:
+        return f"{days}d {hours}h"
+    return f"{hours}h {rest // 60}m" if hours else f"{rest // 60}m"
+
+
+def _guest_line(guest: Guest) -> str:
+    line = f"{guest.name} ({guest.kind} {guest.vmid}): {guest.status}"
+    if guest.status != "running":
+        return line
+
+    ram = _percent(guest.mem, guest.maxmem)
+    parts = [
+        f"up {_duration(guest.uptime)}",
+        f"CPU {round(100 * guest.cpu)}%",
+        f"RAM {ram}% ({guest.mem // MIB} of {guest.maxmem // MIB} MB)",
+    ]
+    usage = [round(100 * guest.cpu), ram]
+    if guest.kind == "lxc" and guest.maxdisk:  # the API gives no disk use for VMs
+        disk = _percent(guest.disk, guest.maxdisk)
+        parts.append(f"disk {disk}%")
+        usage.append(disk)
+
+    line += ", " + ", ".join(parts)
+    if max(usage) >= HIGH_USAGE_PERCENT:
+        line += " WARNING: high usage"
+    return line
+
+
+def guest_status_tool(source: GuestSource) -> Tool:
+    """The tool that lists Proxmox guests. It needs a client, so it is built, not static."""
+
+    def run(target: Target, arguments: dict[str, Any]) -> str:
+        try:
+            guests = source.guests()
+        except ProxmoxError as exc:
+            return f"error: {exc}"
+        if not guests:
+            return "no guests found"
+
+        lines = [(_guest_line(g), g) for g in guests]
+        # Problems first, then stopped guests, then the rest by id.
+        lines.sort(
+            key=lambda row: (
+                "WARNING" not in row[0],
+                row[1].status == "running",
+                row[1].vmid,
+            )
+        )
+        running = sum(g.status == "running" for g in guests)
+        text = [f"{running} of {len(guests)} guests running"] + [
+            line for line, _ in lines
+        ]
+        if len(text) > MAX_LINES:
+            extra = len(text) - MAX_LINES
+            text = text[:MAX_LINES] + [f"... {extra} more not shown"]
+        return "\n".join(text)
+
+    return Tool(
+        name="guest_status",
+        description=(
+            "List the guests (LXC containers and virtual machines) that Proxmox "
+            "runs, whether each one is running, and how much CPU, RAM and disk it uses."
+        ),
+        properties={},
+        required=(),
+        func=run,
+    )

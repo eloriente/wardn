@@ -3,7 +3,8 @@ from pathlib import Path
 import pytest
 from fakes import FakeTarget
 
-from wardn.target import CommandTimeout
+from wardn.proxmox import Guest, ProxmoxError
+from wardn.target import DOCKER_PS, CommandTimeout
 from wardn.tools import (
     CONTAINER_STATUS,
     DISK_USAGE,
@@ -11,7 +12,9 @@ from wardn.tools import (
     LOG_LINES,
     MAX_LINES,
     MEMORY_USAGE,
+    RUNNING_SERVICES,
     SERVICE_STATUS,
+    guest_status_tool,
 )
 
 # Real output captured from the dev sandbox.
@@ -241,7 +244,7 @@ def test_systemctl_failure_is_reported_as_text(target):
 SANDBOX_DOCKER_PS = (
     Path(__file__).parent.parent / "sandbox/fake/docker-ps.jsonl"
 ).read_text()
-DOCKER_COMMAND = ["docker", "ps", "-a", "--format", "{{json .}}"]
+DOCKER_COMMAND = list(DOCKER_PS)
 
 
 def test_container_status_lists_problems_first(target):
@@ -339,3 +342,176 @@ def test_failed_services_failure_is_reported_as_text(target):
     target.exit_code = 1
     target.stderr = "boom"
     assert FAILED_SERVICES.call(target, {}) == "error: systemctl failed (exit 1): boom"
+
+
+def make_guest(vmid, name, status="running", kind="lxc", **fields):
+    values = {"cpu": 0.05, "mem": 512 * 1024**2, "maxmem": 2048 * 1024**2}
+    values |= {
+        "disk": 3 * 1024**3,
+        "maxdisk": 8 * 1024**3,
+        "uptime": 3 * 86400 + 5 * 3600,
+    }
+    return Guest(vmid=vmid, name=name, kind=kind, status=status, **(values | fields))
+
+
+class FakeProxmox:
+    def __init__(self, guests=(), error=None):
+        self._guests, self._error = list(guests), error
+
+    def guests(self):
+        if self._error:
+            raise self._error
+        return self._guests
+
+
+def call_guests(*guests, error=None):
+    tool = guest_status_tool(FakeProxmox(guests, error))
+    return tool.call(FakeTarget(), {})
+
+
+def test_guest_status_summary_computes_the_percentages():
+    output = call_guests(make_guest(100, "plex"))
+    assert output == (
+        "1 of 1 guests running\n"
+        "plex (lxc 100): running, up 3d 5h, CPU 5%, RAM 25% (512 of 2048 MB), disk 38%"
+    )
+
+
+def test_guest_status_has_no_parameters():
+    schema = guest_status_tool(FakeProxmox()).schema()["function"]["parameters"]
+    assert schema["properties"] == {}
+    assert (
+        guest_status_tool(FakeProxmox())
+        .call(FakeTarget(), {"x": 1})
+        .startswith("error: invalid")
+    )
+
+
+def test_stopped_guest_shows_only_its_state():
+    output = call_guests(make_guest(107, "mealie", "stopped", mem=0, uptime=0))
+    assert output.splitlines()[1] == "mealie (lxc 107): stopped"
+
+
+def test_problems_come_first_then_stopped_then_the_rest():
+    output = call_guests(
+        make_guest(100, "plex"),
+        make_guest(101, "off", "stopped"),
+        make_guest(102, "starved", mem=2000 * 1024**2),
+    )
+    names = [line.split(" ")[0] for line in output.splitlines()[1:]]
+    assert names == ["starved", "off", "plex"]
+    assert output.splitlines()[0] == "2 of 3 guests running"
+    assert "WARNING: high usage" in output.splitlines()[1]
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{"cpu": 0.95}, {"mem": 1950 * 1024**2}, {"disk": 7 * 1024**3 + 700 * 1024**2}],
+)
+def test_high_cpu_ram_or_disk_is_flagged(fields):
+    assert "WARNING" in call_guests(make_guest(100, "x", **fields))
+
+
+def test_vms_have_no_disk_figure():
+    line = call_guests(
+        make_guest(200, "vm", kind="qemu", disk=0, maxdisk=0)
+    ).splitlines()[1]
+    assert "disk" not in line
+
+
+def test_durations():
+    from wardn.tools import _duration
+
+    assert [_duration(s) for s in (59, 600, 3 * 3600 + 120, 2 * 86400 + 7200)] == [
+        "0m",
+        "10m",
+        "3h 2m",
+        "2d 2h",
+    ]
+
+
+def test_guest_status_truncates_long_lists():
+    output = call_guests(*(make_guest(i, f"g{i}") for i in range(MAX_LINES + 5)))
+    lines = output.splitlines()
+    assert len(lines) == MAX_LINES + 1
+    assert lines[-1] == "... 6 more not shown"
+
+
+def test_no_guests_and_proxmox_errors_are_text():
+    assert call_guests() == "no guests found"
+    assert call_guests(error=ProxmoxError("refused")) == "error: refused"
+
+
+RUNNING_COMMAND = [
+    "systemctl",
+    "list-units",
+    "--type=service",
+    "--state=running",
+    "--no-pager",
+    "--plain",
+    "--no-legend",
+]
+RUNNING_OUTPUT = (
+    "cron.service loaded active running Regular background program processing daemon\n"
+    "plexmediaserver.service loaded active running Plex Media Server for Linux\n"
+    "ssh.service loaded active running OpenBSD Secure Shell server\n"
+)
+
+
+def test_running_services_schema_makes_search_optional():
+    parameters = RUNNING_SERVICES.schema()["function"]["parameters"]
+    assert parameters["properties"]["search"]["type"] == "string"
+    assert parameters["required"] == []
+
+
+def test_running_services_lists_every_service(target):
+    target.stdout = RUNNING_OUTPUT
+    output = RUNNING_SERVICES.call(target, {})
+    assert output.splitlines()[0] == "3 running services:"
+    assert "  ssh.service (OpenBSD Secure Shell server)" in output
+    assert target.executed == [RUNNING_COMMAND]
+
+
+def test_running_services_search_matches_name_or_description_case_insensitively(target):
+    target.stdout = RUNNING_OUTPUT
+    assert RUNNING_SERVICES.call(target, {"search": "PLEX"}) == (
+        "1 running services matching 'PLEX':\n"
+        "  plexmediaserver.service (Plex Media Server for Linux)"
+    )
+    assert "ssh.service" in RUNNING_SERVICES.call(target, {"search": "secure shell"})
+
+
+def test_running_services_without_a_match(target):
+    target.stdout = RUNNING_OUTPUT
+    assert (
+        RUNNING_SERVICES.call(target, {"search": "nope"})
+        == "no running services match 'nope'"
+    )
+
+
+def test_running_services_truncates_and_suggests_searching(target):
+    target.stdout = "".join(
+        f"u{i}.service loaded active running U {i}\n" for i in range(MAX_LINES + 4)
+    )
+    lines = RUNNING_SERVICES.call(target, {}).splitlines()
+    assert len(lines) == MAX_LINES + 2
+    assert lines[-1] == "  ... 4 more not shown: pass search to narrow it down"
+
+
+def test_running_services_rejects_non_text_search_and_unknown_arguments(target):
+    assert RUNNING_SERVICES.call(target, {"search": 5}).startswith(
+        "error: search must be text"
+    )
+    assert RUNNING_SERVICES.call(target, {"filter": "x"}).startswith("error: invalid")
+    assert target.executed == []
+
+
+def test_running_services_failure_is_reported_as_text(target):
+    target.exit_code = 1
+    target.stderr = "boom"
+    assert RUNNING_SERVICES.call(target, {}) == "error: systemctl failed (exit 1): boom"
+
+
+def test_service_status_not_found_points_to_the_service_list(target):
+    target.exit_code = 4
+    assert "running services" in SERVICE_STATUS.call(target, {"unit": "plex.service"})

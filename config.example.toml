@@ -1,5 +1,8 @@
 # Copy to ~/.config/wardn/config.toml and edit.
-# This file holds no secrets: only the path to each SSH key.
+# One file for everything. Tokens can be written here (token = "...") or kept in a
+# file of their own (token_file = "..."). With a token inside, Wardn refuses to
+# start unless only you can read this file: chmod 600 ~/.config/wardn/config.toml
+# SSH keys stay files, and this file holds their path.
 
 model = "qwen3:4b-instruct"
 # ollama_url = "http://localhost:11434"
@@ -14,15 +17,33 @@ hostnames = []  # names of your machines, for example ["my-server"]
 users = []  # other account names that appear in logs
 paths = []  # more path prefixes to hide, for example ["/mnt/private"]
 
+# Optional: `wardn bot` answers /status and /ask in Telegram. Create the bot with
+# @BotFather. Only the user ids in allowed_users get an answer; @userinfobot tells
+# you yours.
+# [telegram]
+# token = "123456:ABC..."
+# allowed_users = [123456789]
+
 [targets.sandbox]
 host = "127.0.0.1"
 port = 2222
 user = "wardn"
 key = "~/.ssh/wardn_sandbox"
+# `wardn summary` checks every target unless it says summary = false.
+summary = false
 
 [targets.homelab]
 host = "192.168.1.10"
 user = "wardn"
 key = "~/.ssh/wardn_homelab"
-# Leave out `tools` to enable all of them.
-tools = ["disk_usage", "memory_usage", "service_status", "failed_services"]
+# Leave out `tools` to enable all of them. guest_status needs the proxmox section.
+tools = ["disk_usage", "memory_usage", "service_status", "failed_services", "guest_status"]
+
+# Optional, for a Proxmox host: adds the guest_status tool (all guests at once,
+# through the read-only API). ca_file is the CA that signed your Proxmox
+# certificate.
+[targets.homelab.proxmox]
+url = "https://192.168.1.10:8006"
+node = "pve"
+token = "wardn@pve!agent=SECRET"
+ca_file = "~/.config/wardn/pve-ca.pem"

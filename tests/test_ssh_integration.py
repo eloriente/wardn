@@ -11,7 +11,7 @@ import pytest
 
 from wardn.audit import MemoryAuditLog
 from wardn.ssh_target import SSHTarget
-from wardn.target import DEFAULT_RULES, Allowlist, CommandNotAllowed
+from wardn.target import DEFAULT_RULES, DOCKER_PS, Allowlist, CommandNotAllowed
 
 KEY = os.environ.get("WARDN_SSH_KEY")
 
@@ -48,7 +48,7 @@ def test_disallowed_command_is_blocked_before_ssh(target):
 
 
 def test_fake_docker_ps_runs_in_sandbox(target):
-    result = target.run(["docker", "ps", "-a", "--format", "{{json .}}"])
+    result = target.run(list(DOCKER_PS))
     assert result.exit_code == 0
     assert '"Names":"plex"' in result.stdout
 
@@ -63,3 +63,18 @@ def test_failed_services_runs_in_sandbox(target):
         "--no-legend",
     ]
     assert target.run(command).exit_code == 0
+
+
+def test_running_services_runs_in_sandbox(target):
+    command = [
+        "systemctl",
+        "list-units",
+        "--type=service",
+        "--state=running",
+        "--no-pager",
+        "--plain",
+        "--no-legend",
+    ]
+    result = target.run(command)
+    assert result.exit_code == 0
+    assert "ssh.service" in result.stdout

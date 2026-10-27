@@ -3,9 +3,8 @@
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
-from wardn.audit import timestamp
 from wardn.ollama import ChatResponse
-from wardn.redact import Redactor
+from wardn.redact import Redactor, hide
 from wardn.target import Target
 from wardn.tools import Tool
 
@@ -52,18 +51,7 @@ class Agent:
         self._redactor = redactor or Redactor()
 
     def _hide(self, text: str, source: str) -> str:
-        """Hide sensitive data, and note in the audit log how much was hidden."""
-        text = self._redactor.redact(text)
-        if counts := self._redactor.drain():
-            self._target.audit.record(
-                {
-                    "ts": timestamp(),
-                    "event": "redaction",
-                    "source": source,
-                    "counts": dict(counts),
-                }
-            )
-        return text
+        return hide(self._redactor, self._target.audit, text, source)
 
     def run(self, question: str) -> AgentResult:
         self._redactor.reset()  # aliases such as <ip-1> belong to one conversation

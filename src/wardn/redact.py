@@ -13,6 +13,8 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
+from wardn.audit import AuditLog, timestamp
+
 SECRET = "[REDACTED:secret]"
 
 # Always hidden, on top of the paths in the rules. Data disks (/mnt/...) stay
@@ -169,3 +171,18 @@ class Redactor:
         if address.is_loopback or address.is_unspecified:
             return match.group(0)
         return self._hide("ip", str(address))
+
+
+def hide(redactor: Redactor, audit: AuditLog, text: str, source: str) -> str:
+    """Hide sensitive data, and note in the audit log how much was hidden."""
+    text = redactor.redact(text)
+    if counts := redactor.drain():
+        audit.record(
+            {
+                "ts": timestamp(),
+                "event": "redaction",
+                "source": source,
+                "counts": dict(counts),
+            }
+        )
+    return text

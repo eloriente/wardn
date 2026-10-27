@@ -1,5 +1,6 @@
 #!/bin/sh
-# Fake `docker` for the dev sandbox. Only answers `docker ps -a --format '{{json .}}'`,
+# Fake `docker` for the dev sandbox. Only answers `docker ps -a --format '{{json .}}'`
+# (wardn runs it through sudo, as on the real hosts),
 # printing the lines of /etc/wardn-fake/docker-ps.jsonl. Edit that file to stage a
 # scenario (a crashed container, a stopped one...), no rebuild needed.
 if [ "$1 $2 $3 $4" = "ps -a --format {{json .}}" ] && [ "$#" -eq 4 ]; then

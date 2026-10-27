@@ -12,9 +12,21 @@ from dataclasses import dataclass, field
 
 from wardn.agent import Agent, AgentResult, ChatClient
 from wardn.audit import MemoryAuditLog
+from wardn.proxmox import Guest
 from wardn.redact import RedactionRules, Redactor
+from wardn.summary import Source, collect, summary_tools, write_digest
 from wardn.target import DEFAULT_RULES, Allowlist, CommandResult, Target
-from wardn.tools import ALL_TOOLS
+from wardn.tools import ALL_TOOLS, guest_status_tool
+
+
+class StaticGuests:
+    """A Proxmox that reports a fixed list of guests."""
+
+    def __init__(self, guests: Sequence[Guest]):
+        self._guests = list(guests)
+
+    def guests(self) -> list[Guest]:
+        return list(self._guests)
 
 
 class ScriptedTarget(Target):
@@ -36,10 +48,31 @@ class Scenario:
     responses: Mapping[tuple[str, ...], CommandResult]  # what each command prints
     tools: tuple[str, ...] | None = None  # None means all tools
     rules: RedactionRules = field(default_factory=RedactionRules)  # what to hide
+    guests: tuple[Guest, ...] | None = None  # what Proxmox reports; None: no such tool
     expect_tools: tuple[str, ...] = ()  # must all be called
     forbid_tools: tuple[str, ...] = ()  # none may be called
     expect_any: tuple[str, ...] = ()  # the answer must contain at least one
     forbid: tuple[str, ...] = ()  # the answer must contain none
+
+
+@dataclass(frozen=True)
+class TargetFixture:
+    """One machine of a summary scenario."""
+
+    responses: Mapping[tuple[str, ...], CommandResult]
+    tools: tuple[str, ...] | None = None  # None means all tools
+    guests: tuple[Guest, ...] | None = None
+
+
+@dataclass(frozen=True)
+class SummaryScenario:
+    """The model writes a summary of several machines. No question is asked."""
+
+    name: str
+    targets: Mapping[str, TargetFixture]
+    expect_all: tuple[str, ...] = ()  # the summary must contain every one
+    expect_any: tuple[str, ...] = ()  # and at least one of these
+    forbid: tuple[str, ...] = ()  # and none of these
 
 
 @dataclass(frozen=True)
@@ -56,7 +89,7 @@ class Outcome:
 
 @dataclass(frozen=True)
 class ScenarioResult:
-    scenario: Scenario
+    scenario: Scenario | SummaryScenario
     outcomes: list[Outcome] = field(default_factory=list)
 
     @property
@@ -91,9 +124,52 @@ def check(scenario: Scenario, result: AgentResult) -> list[str]:
     return failures
 
 
-def run_once(scenario: Scenario, client: ChatClient) -> Outcome:
+def check_summary(scenario: SummaryScenario, digest: str) -> list[str]:
+    text = digest.lower()
+    failures = [
+        f"summary lacks {t!r}" for t in scenario.expect_all if t.lower() not in text
+    ]
+    if scenario.expect_any and not any(t.lower() in text for t in scenario.expect_any):
+        failures.append(f"summary has none of {list(scenario.expect_any)}")
+    failures += [
+        f"summary contains {t!r}" for t in scenario.forbid if t.lower() in text
+    ]
+    return failures
+
+
+def run_summary_once(scenario: SummaryScenario, client: ChatClient) -> Outcome:
+    sources = []
+    for name, fixture in scenario.targets.items():
+        available = ALL_TOOLS
+        if fixture.guests is not None:
+            available += (guest_status_tool(StaticGuests(fixture.guests)),)
+        tools = tuple(
+            t for t in available if fixture.tools is None or t.name in fixture.tools
+        )
+        sources.append(
+            Source(name, ScriptedTarget(fixture.responses), summary_tools(tools))
+        )
+
+    started = time.monotonic()
+    redactor = Redactor()
+    reports = collect(sources, redactor)
+    digest = write_digest(client, reports, redactor, MemoryAuditLog())
+    return Outcome(
+        failures=check_summary(scenario, digest),
+        answer=digest,
+        tools_called=(),
+        seconds=time.monotonic() - started,
+    )
+
+
+def run_once(scenario: Scenario | SummaryScenario, client: ChatClient) -> Outcome:
+    if isinstance(scenario, SummaryScenario):
+        return run_summary_once(scenario, client)
+    available = ALL_TOOLS
+    if scenario.guests is not None:
+        available += (guest_status_tool(StaticGuests(scenario.guests)),)
     tools = tuple(
-        t for t in ALL_TOOLS if scenario.tools is None or t.name in scenario.tools
+        t for t in available if scenario.tools is None or t.name in scenario.tools
     )
     redactor = Redactor(scenario.rules)
     agent = Agent(client, ScriptedTarget(scenario.responses), tools, redactor=redactor)
@@ -108,7 +184,7 @@ def run_once(scenario: Scenario, client: ChatClient) -> Outcome:
 
 
 def evaluate(
-    scenarios: Sequence[Scenario],
+    scenarios: Sequence[Scenario | SummaryScenario],
     client: ChatClient,
     runs: int,
     on_run: Callable[[str, int, int], None] | None = None,

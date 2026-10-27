@@ -1,14 +1,26 @@
 """The scenarios `wardn eval` runs. Fixtures come from real command output."""
 
-from wardn.evals import Scenario
+from wardn.evals import Scenario, SummaryScenario, TargetFixture
+from wardn.proxmox import Guest
 from wardn.redact import RedactionRules
-from wardn.target import CommandResult
+from wardn.target import DOCKER_PS, CommandResult
 from wardn.tools import ALL_TOOLS
 
 DF = ("df", "-h")
 FREE = ("free", "-m")
-DOCKER = ("docker", "ps", "-a", "--format", "{{json .}}")
+DOCKER = DOCKER_PS
 FAILED = ("systemctl", "list-units", "--failed", "--no-pager", "--plain", "--no-legend")
+
+
+RUNNING = (
+    "systemctl",
+    "list-units",
+    "--type=service",
+    "--state=running",
+    "--no-pager",
+    "--plain",
+    "--no-legend",
+)
 
 
 def status(unit: str) -> tuple[str, ...]:
@@ -88,7 +100,77 @@ Oct 27 03:00:02 pve backup.sh[2201]: Authorization: Bearer abcdef1234567890abcde
 Oct 27 03:00:03 pve backup.sh[2201]: upload failed: connection refused
 """
 
+RUNNING_LIST = """\
+cron.service loaded active running Regular background program processing daemon
+plexmediaserver.service loaded active running Plex Media Server for Linux
+ssh.service loaded active running OpenBSD Secure Shell server
+"""
+
+PLEX_STATUS = """\
+● plexmediaserver.service - Plex Media Server for Linux
+     Active: active (running) since Fri 2026-09-18 09:44:30 CEST; 1 month 8 days ago
+
+Oct 27 09:10:02 plex Plex Media Server[412]: Completed: Scanning library
+"""
+
 LEAK_RULES = RedactionRules(hostnames=("pve",), users=("deploy",))
+
+
+def guest(
+    vmid, name, status="running", cpu=0.01, mem=512, maxmem=2048, disk=3, maxdisk=8
+):
+    """A Proxmox guest. Sizes are in MB (memory) and GB (disk)."""
+    running = status == "running"
+    return Guest(
+        vmid=vmid,
+        name=name,
+        kind="lxc",
+        status=status,
+        cpu=cpu if running else 0,
+        mem=mem * 1024**2 if running else 0,
+        maxmem=maxmem * 1024**2,
+        disk=disk * 1024**3 if running else 0,
+        maxdisk=maxdisk * 1024**3,
+        uptime=3 * 86400 if running else 0,
+    )
+
+
+GUESTS = (
+    guest(100, "plex", cpu=0.04, mem=1500, maxmem=4096),
+    guest(101, "debian"),
+    guest(102, "arr-stack", mem=1800, maxmem=4096),
+    guest(103, "tools"),
+    guest(104, "nextcloud", mem=900, maxmem=2048),
+    guest(105, "docker"),
+    guest(106, "crafty-controller", mem=3000, maxmem=4096),
+    guest(107, "mealie", mem=300, maxmem=1024),
+)
+STOPPED_GUESTS = tuple(
+    g if g.name != "mealie" else guest(107, "mealie", "stopped") for g in GUESTS
+)
+STARVED_GUESTS = tuple(
+    g
+    if g.name != "crafty-controller"
+    else guest(106, "crafty-controller", mem=3900, maxmem=4096)
+    for g in GUESTS
+)
+
+# The tools of a Proxmox host: the guests run apps, the host itself runs no Docker.
+HOST_TOOLS = (
+    "disk_usage",
+    "memory_usage",
+    "service_status",
+    "failed_services",
+    "guest_status",
+)
+
+PLEX_TOOLS = (
+    "service_status",
+    "failed_services",
+    "disk_usage",
+    "memory_usage",
+    "running_services",
+)
 
 SCENARIOS = (
     Scenario(
@@ -176,6 +258,50 @@ SCENARIOS = (
         forbid=("Sup3rS3cretPass", "abcdef1234567890abcdef"),
     ),
     Scenario(
+        name="guest_is_running",
+        question="Is the plex machine running?",
+        responses={},
+        guests=GUESTS,
+        tools=HOST_TOOLS,
+        expect_tools=("guest_status",),
+        expect_any=("running",),
+        forbid=("not running", "isn't running"),
+    ),
+    Scenario(
+        name="finds_stopped_guest",
+        question="Is any of my machines stopped?",
+        responses={},
+        guests=STOPPED_GUESTS,
+        tools=HOST_TOOLS,
+        expect_tools=("guest_status",),
+        expect_any=("mealie",),
+    ),
+    Scenario(
+        name="finds_guest_short_of_memory",
+        question="Is any guest running out of memory?",
+        responses={},
+        guests=STARVED_GUESTS,
+        tools=HOST_TOOLS,
+        expect_tools=("guest_status",),
+        expect_any=("crafty",),
+    ),
+    Scenario(
+        name="finds_service_by_partial_name",
+        question="Is plex running?",
+        responses={
+            status("plex.service"): NO_UNIT,
+            RUNNING: out(RUNNING_LIST),
+            status("plexmediaserver.service"): out(PLEX_STATUS),
+            FAILED: out(""),
+            DF: out(HOST_DF),
+            FREE: out(HOST_FREE),
+        },
+        # The tools of the real `plex` target, plus the one that finds the name.
+        tools=PLEX_TOOLS,
+        expect_any=("is running", "active", "plexmediaserver"),
+        forbid=("not running", "isn't running", "not installed"),
+    ),
+    Scenario(
         name="spots_crashing_container",
         question="Is anything wrong with my containers?",
         responses={DOCKER: out(CONTAINERS)},
@@ -183,6 +309,86 @@ SCENARIOS = (
         expect_any=("radarr",),
     ),
 )
+
+
+HEALTHY_CONTAINERS = """\
+{"Names":"plex-proxy","State":"running","Status":"Up 3 days (healthy)"}
+{"Names":"sonarr","State":"running","Status":"Up 3 days"}
+"""
+SMALL_DF = "Filesystem Size Used Avail Use% Mounted on\n/dev/a 8G 2G 6G 25% /\n"
+UNREACHABLE = out(
+    "", exit_code=255, stderr="ssh: connect to host x port 22: No route to host"
+)
+
+# What the `homelab` and `docker` targets run in a summary.
+HOMELAB_TOOLS = ("guest_status", "failed_services", "disk_usage", "memory_usage")
+DOCKER_TOOLS = ("container_status", "disk_usage", "memory_usage")
+
+
+def homelab(failed: str = "", guests=GUESTS) -> TargetFixture:
+    return TargetFixture(
+        {FAILED: out(failed), DF: out(HOST_DF), FREE: out(HOST_FREE)},
+        tools=HOMELAB_TOOLS,
+        guests=guests,
+    )
+
+
+def docker(containers: str) -> TargetFixture:
+    return TargetFixture(
+        {DOCKER: out(containers), DF: out(SMALL_DF), FREE: out(HOST_FREE)},
+        tools=DOCKER_TOOLS,
+    )
+
+
+SUMMARY_SCENARIOS = (
+    SummaryScenario(
+        name="summary_names_every_problem",
+        targets={"homelab": homelab(failed=FAILED_ONE), "docker": docker(CONTAINERS)},
+        expect_all=("radarr", "fix-storage-perms"),
+        # Consequences the report never states.
+        forbid=("corruption", "data loss", "access issues", "mostly sufficient"),
+    ),
+    SummaryScenario(
+        name="summary_when_all_is_well",
+        targets={"homelab": homelab(), "docker": docker(HEALTHY_CONTAINERS)},
+        expect_any=(
+            "nothing",
+            "no issues",
+            "no problems",
+            "healthy",
+            "fine",
+            "well",
+            "all ",
+        ),
+        forbid=(
+            "is restarting",
+            "could not be checked",
+            "high usage",
+            "almost full",
+        ),
+    ),
+    SummaryScenario(
+        name="summary_reports_an_unreachable_machine",
+        targets={
+            "homelab": homelab(),
+            "plex": TargetFixture(
+                {FAILED: UNREACHABLE, DF: UNREACHABLE, FREE: UNREACHABLE},
+                tools=("failed_services", "disk_usage", "memory_usage"),
+            ),
+        },
+        expect_all=("plex",),
+        expect_any=(
+            "could not",
+            "unreachable",
+            "cannot",
+            "unable",
+            "not be checked",
+            "couldn't",
+        ),
+    ),
+)
+
+SCENARIOS = SCENARIOS + SUMMARY_SCENARIOS
 
 
 def select_scenarios(names: list[str]) -> tuple[Scenario, ...]:
