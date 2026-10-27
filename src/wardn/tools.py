@@ -5,11 +5,12 @@ function that uses a Target. Tools never run anything themselves, and their
 output is short on purpose: the model is small.
 """
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from wardn.target import CommandNotAllowed, CommandTimeout, Target
+from wardn.target import UNIT, CommandNotAllowed, CommandTimeout, Target
 
 MAX_LINES = 20
 
@@ -144,4 +145,59 @@ MEMORY_USAGE = Tool(
     func=_memory_usage,
 )
 
-ALL_TOOLS = (DISK_USAGE, MEMORY_USAGE)
+LOG_LINES = 5
+MAX_LOG_LINE_CHARS = 200
+# Journal lines in `systemctl status` start with a timestamp, e.g. "Oct 27 07:40:34".
+JOURNAL_LINE = re.compile(r"[A-Z][a-z]{2} +\d{1,2} \d\d:\d\d:\d\d ")
+BARE_UNIT = re.compile(r"[A-Za-z0-9][A-Za-z0-9@_-]*")
+UNIT_HINT = "error: unit must be a systemd unit name such as ssh.service"
+
+
+def _service_status(target: Target, arguments: dict[str, Any]) -> str:
+    unit = arguments["unit"]
+    if not isinstance(unit, str):
+        return UNIT_HINT
+    if BARE_UNIT.fullmatch(unit):
+        unit += ".service"  # forgive "ssh" for "ssh.service"
+    if not UNIT.fullmatch(unit):
+        return UNIT_HINT
+
+    result = target.run(["systemctl", "status", unit, "--no-pager"])
+    if result.exit_code == 4:
+        # Say only what we know: a service may run outside systemd (a container).
+        return (
+            f"{unit}: no systemd unit with that name "
+            "(the service may run elsewhere, for example in a container)"
+        )
+
+    lines = [line.strip() for line in result.stdout.splitlines()]
+    active = next(
+        (l.removeprefix("Active:").strip() for l in lines if l.startswith("Active:")),
+        None,
+    )
+    # systemctl exits 3 for a unit that is inactive or failed: still a valid answer.
+    if result.exit_code not in (0, 3) or active is None:
+        return f"error: systemctl failed (exit {result.exit_code}): {result.stderr.strip()[:200]}"
+
+    summary = [f"{unit}: {active}"]
+    log = [l[:MAX_LOG_LINE_CHARS] for l in lines if JOURNAL_LINE.match(l)][-LOG_LINES:]
+    if log:
+        summary.append("Recent log:")
+        summary.extend(f"  {line}" for line in log)
+    return "\n".join(summary)
+
+
+SERVICE_STATUS = Tool(
+    name="service_status",
+    description="Show whether a systemd service is running, and its recent log lines.",
+    properties={
+        "unit": {
+            "type": "string",
+            "description": "Name of the systemd unit, for example ssh.service",
+        }
+    },
+    required=("unit",),
+    func=_service_status,
+)
+
+ALL_TOOLS = (DISK_USAGE, MEMORY_USAGE, SERVICE_STATUS)

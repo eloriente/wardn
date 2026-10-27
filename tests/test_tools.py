@@ -2,7 +2,13 @@ import pytest
 from fakes import FakeTarget
 
 from wardn.target import CommandTimeout
-from wardn.tools import DISK_USAGE, MAX_LINES, MEMORY_USAGE
+from wardn.tools import (
+    DISK_USAGE,
+    LOG_LINES,
+    MAX_LINES,
+    MEMORY_USAGE,
+    SERVICE_STATUS,
+)
 
 # Real output captured from the dev sandbox.
 SANDBOX_DF = """\
@@ -123,3 +129,93 @@ def test_free_failure_is_reported_as_text(target):
     target.exit_code = 1
     target.stderr = "free: boom"
     assert MEMORY_USAGE.call(target, {}) == "error: free failed (exit 1): free: boom"
+
+
+# Real output captured from the dev sandbox (trimmed).
+SANDBOX_SSH_STATUS = """\
+● ssh.service - OpenBSD Secure Shell server
+     Loaded: loaded (/lib/systemd/system/ssh.service; enabled; preset: enabled)
+     Active: active (running) since Tue 2026-10-27 07:42:53 UTC; 39s ago
+       Docs: man:sshd(8)
+   Main PID: 55 (sshd)
+      Tasks: 4 (limit: 9444)
+     CGroup: /docker/a9c2/system.slice/ssh.service
+             ├─55 "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups"
+             └─66 systemctl status ssh --no-pager
+
+Oct 27 07:43:30 a9c21a719dfb sshd[60]: Accepted publickey for wardn
+Oct 27 07:43:31 a9c21a719dfb sshd[60]: pam_unix(sshd:session): session opened
+Oct 27 07:43:32 a9c21a719dfb sshd[65]: Received disconnect from 172.19.0.1
+Oct 27 07:43:32 a9c21a719dfb sshd[65]: Disconnected from user wardn
+Oct 27 07:43:33 a9c21a719dfb sshd[70]: Accepted publickey for wardn
+Oct 27 07:43:34 a9c21a719dfb sshd[70]: pam_unix(sshd:session): session closed
+Warning: journal has been rotated since unit was started, output may be incomplete.
+"""
+
+SSH_COMMAND = ["systemctl", "status", "ssh.service", "--no-pager"]
+
+
+def test_service_status_schema_requires_unit():
+    parameters = SERVICE_STATUS.schema()["function"]["parameters"]
+    assert parameters["required"] == ["unit"]
+    assert parameters["properties"]["unit"]["type"] == "string"
+
+
+def test_service_status_summary_and_last_log_lines(target):
+    target.stdout = SANDBOX_SSH_STATUS
+    lines = SERVICE_STATUS.call(target, {"unit": "ssh.service"}).splitlines()
+
+    assert (
+        lines[0]
+        == "ssh.service: active (running) since Tue 2026-10-27 07:42:53 UTC; 39s ago"
+    )
+    assert lines[1] == "Recent log:"
+    assert len(lines) == 2 + LOG_LINES
+    assert lines[-1].endswith("session closed")  # the warning line is ignored
+    assert target.executed == [SSH_COMMAND]
+
+
+def test_failed_service_is_a_valid_answer(target):
+    target.exit_code = 3
+    target.stdout = "● plex.service - Plex\n     Active: failed (Result: exit-code) since Tue 2026-10-27 07:00:00 UTC; 5min ago\n"
+    output = SERVICE_STATUS.call(target, {"unit": "plex.service"})
+    assert (
+        output
+        == "plex.service: failed (Result: exit-code) since Tue 2026-10-27 07:00:00 UTC; 5min ago"
+    )
+
+
+def test_unknown_unit(target):
+    target.exit_code = 4
+    target.stderr = "Unit nope.service could not be found."
+    output = SERVICE_STATUS.call(target, {"unit": "nope.service"})
+    assert output.startswith("nope.service: no systemd unit with that name")
+    assert "container" in output
+    assert "not installed" not in output
+
+
+def test_bare_name_gets_service_suffix(target):
+    target.stdout = SANDBOX_SSH_STATUS
+    SERVICE_STATUS.call(target, {"unit": "ssh"})
+    assert target.executed == [SSH_COMMAND]
+
+
+@pytest.mark.parametrize(
+    "unit", ["ssh; rm -rf /", "--help", "$(id)", "a b", "", 42, None]
+)
+def test_invalid_unit_is_rejected_without_running(target, unit):
+    output = SERVICE_STATUS.call(target, {"unit": unit})
+    assert output.startswith("error: unit must be")
+    assert target.executed == []
+
+
+def test_missing_unit_is_an_invalid_call(target):
+    assert SERVICE_STATUS.call(target, {}).startswith("error: invalid arguments")
+
+
+def test_systemctl_failure_is_reported_as_text(target):
+    target.exit_code = 1
+    target.stderr = "boom"
+    assert SERVICE_STATUS.call(target, {"unit": "ssh"}).startswith(
+        "error: systemctl failed (exit 1)"
+    )
