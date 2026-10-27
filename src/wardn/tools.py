@@ -100,4 +100,48 @@ DISK_USAGE = Tool(
     func=_disk_usage,
 )
 
-ALL_TOOLS = (DISK_USAGE,)
+LOW_MEMORY_PERCENT = 10  # warn when less than this share is available
+
+
+def _memory_usage(target: Target, arguments: dict[str, Any]) -> str:
+    result = target.run(["free", "-m"])
+    if result.exit_code != 0:
+        return f"error: free failed (exit {result.exit_code}): {result.stderr.strip()[:200]}"
+
+    rows = {}
+    for raw in result.stdout.splitlines():
+        label, _, rest = raw.partition(":")
+        if label in ("Mem", "Swap"):
+            rows[label] = rest.split()
+    mem = rows.get("Mem", [])
+    if len(mem) < 6 or not all(value.isdigit() for value in mem[:6]):
+        return "error: could not read the output of free"
+
+    total, available = int(mem[0]), int(mem[5])
+    # "available" is what new programs can really get (it counts reclaimable
+    # cache), so memory in use is total minus available, not free's "used".
+    in_use = total - available
+    line = (
+        f"RAM: {round(100 * in_use / total)}% in use "
+        f"({in_use} MB of {total} MB), {available} MB available"
+    )
+    if available * 100 < total * LOW_MEMORY_PERCENT:
+        line += " WARNING: low memory"
+
+    swap = rows.get("Swap", [])
+    if len(swap) >= 2 and swap[0].isdigit() and int(swap[0]) > 0:
+        line += f"\nSwap: {swap[1]} MB used of {swap[0]} MB"
+    else:
+        line += "\nSwap: none"
+    return line
+
+
+MEMORY_USAGE = Tool(
+    name="memory_usage",
+    description="Show how much RAM is in use on the server.",
+    properties={},
+    required=(),
+    func=_memory_usage,
+)
+
+ALL_TOOLS = (DISK_USAGE, MEMORY_USAGE)

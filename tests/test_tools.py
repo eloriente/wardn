@@ -2,7 +2,7 @@ import pytest
 from fakes import FakeTarget
 
 from wardn.target import CommandTimeout
-from wardn.tools import DISK_USAGE, MAX_LINES
+from wardn.tools import DISK_USAGE, MAX_LINES, MEMORY_USAGE
 
 # Real output captured from the dev sandbox.
 SANDBOX_DF = """\
@@ -80,3 +80,46 @@ def test_df_failure_is_reported_as_text(target):
 def test_timeout_is_reported_as_text(target):
     target.raises = CommandTimeout("slow")
     assert DISK_USAGE.call(target, {}) == "error: the command timed out"
+
+
+# Real output captured from the dev sandbox.
+SANDBOX_FREE = """\
+               total        used        free      shared  buff/cache   available
+Mem:            7834         501        6830           0         663        7332
+Swap:           1023           0        1023
+"""
+
+
+def test_memory_usage_summary(target):
+    target.stdout = SANDBOX_FREE
+    output = MEMORY_USAGE.call(target, {})
+    assert output == (
+        "RAM: 6% in use (502 MB of 7834 MB), 7332 MB available\nSwap: 0 MB used of 1023 MB"
+    )
+    assert target.executed == [["free", "-m"]]
+
+
+def test_memory_usage_without_swap(target):
+    target.stdout = "total used free shared buff/cache available\nMem: 1000 100 800 0 100 850\nSwap: 0 0 0\n"
+    assert MEMORY_USAGE.call(target, {}).endswith("Swap: none")
+
+
+def test_low_memory_is_flagged(target):
+    target.stdout = "total used free shared buff/cache available\nMem: 1000 950 20 0 30 50\nSwap: 0 0 0\n"
+    assert "WARNING: low memory" in MEMORY_USAGE.call(target, {})
+
+
+def test_unreadable_free_output(target):
+    target.stdout = "garbage"
+    assert MEMORY_USAGE.call(target, {}).startswith("error: could not read")
+
+
+def test_memory_usage_rejects_arguments(target):
+    assert MEMORY_USAGE.call(target, {"unit": "gb"}).startswith("error: invalid")
+    assert target.executed == []
+
+
+def test_free_failure_is_reported_as_text(target):
+    target.exit_code = 1
+    target.stderr = "free: boom"
+    assert MEMORY_USAGE.call(target, {}) == "error: free failed (exit 1): free: boom"
