@@ -5,13 +5,21 @@ which checks it against an allowlist before anything runs.
 """
 
 import re
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
+
+from wardn.audit import AuditLog
 
 
 class CommandNotAllowed(Exception):
     """The command is not in the allowlist."""
+
+
+class CommandTimeout(Exception):
+    """The command did not finish in time."""
 
 
 @dataclass(frozen=True)
@@ -57,13 +65,41 @@ class Allowlist:
 class Target(ABC):
     """Runs allowlisted commands. Subclasses only implement `_execute`."""
 
-    def __init__(self, allowlist: Allowlist):
+    def __init__(self, allowlist: Allowlist, audit: AuditLog):
         self._allowlist = allowlist
+        self._audit = audit
 
     def run(self, argv: Sequence[str]) -> CommandResult:
-        # The check lives here, not in subclasses, so it cannot be skipped.
-        self._allowlist.check(argv)
-        return self._execute(argv)
+        # The check and the audit live here, not in subclasses, so neither
+        # can be skipped. Every attempt is recorded, including rejected ones.
+        started = time.monotonic()
+        shown = argv if isinstance(argv, str) else list(argv)
+        try:
+            self._allowlist.check(argv)
+        except CommandNotAllowed as exc:
+            self._record(shown, "rejected", started, reason=str(exc))
+            raise
+        try:
+            result = self._execute(argv)
+        except CommandTimeout:
+            self._record(shown, "timeout", started)
+            raise
+        except Exception as exc:
+            self._record(shown, "error", started, reason=repr(exc))
+            raise
+        self._record(shown, "executed", started, exit_code=result.exit_code)
+        return result
+
+    def _record(self, argv, status: str, started: float, **extra) -> None:
+        self._audit.record(
+            {
+                "ts": datetime.now(UTC).isoformat(),
+                "argv": argv,
+                "status": status,
+                "duration_ms": round((time.monotonic() - started) * 1000),
+                **extra,
+            }
+        )
 
     @abstractmethod
     def _execute(self, argv: Sequence[str]) -> CommandResult: ...

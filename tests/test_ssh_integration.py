@@ -1,0 +1,47 @@
+"""Runs against the dev sandbox. Skipped unless WARDN_SSH_KEY points at the key.
+
+docker compose -f compose.dev.yaml up -d
+WARDN_SSH_KEY=~/.ssh/wardn_sandbox uv run pytest tests/test_ssh_integration.py
+"""
+
+import os
+from pathlib import Path
+
+import pytest
+
+from wardn.audit import MemoryAuditLog
+from wardn.ssh_target import SSHTarget
+from wardn.target import DEFAULT_RULES, Allowlist, CommandNotAllowed
+
+KEY = os.environ.get("WARDN_SSH_KEY")
+
+pytestmark = pytest.mark.skipif(not KEY, reason="WARDN_SSH_KEY not set")
+
+
+@pytest.fixture
+def target():
+    return SSHTarget(
+        Allowlist(DEFAULT_RULES),
+        MemoryAuditLog(),
+        host="127.0.0.1",
+        user="wardn",
+        key_path=Path(KEY).expanduser(),
+        port=2222,
+    )
+
+
+def test_df_runs_in_sandbox(target):
+    result = target.run(["df", "-h"])
+    assert result.exit_code == 0
+    assert "Filesystem" in result.stdout
+
+
+def test_systemctl_status_runs_in_sandbox(target):
+    result = target.run(["systemctl", "status", "ssh.service", "--no-pager"])
+    assert result.exit_code == 0
+    assert "active (running)" in result.stdout
+
+
+def test_disallowed_command_is_blocked_before_ssh(target):
+    with pytest.raises(CommandNotAllowed):
+        target.run(["cat", "/etc/passwd"])

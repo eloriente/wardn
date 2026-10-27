@@ -1,24 +1,7 @@
 import pytest
+from fakes import FakeTarget
 
-from wardn.target import (
-    DEFAULT_RULES,
-    Allowlist,
-    CommandNotAllowed,
-    CommandResult,
-    Target,
-)
-
-
-class FakeTarget(Target):
-    """Records what would have been executed; never runs anything."""
-
-    def __init__(self):
-        super().__init__(Allowlist(DEFAULT_RULES))
-        self.executed = []
-
-    def _execute(self, argv):
-        self.executed.append(list(argv))
-        return CommandResult(stdout="ok", stderr="", exit_code=0)
+from wardn.target import CommandNotAllowed
 
 
 @pytest.fixture
