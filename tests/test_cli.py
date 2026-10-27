@@ -120,3 +120,21 @@ def test_chat_ends_on_ctrl_d(config_file, agent, monkeypatch):
     monkeypatch.setattr("builtins.input", raise_eof)
     assert cli.main([*config_file, "chat"]) == 0
     assert agent.questions == []
+
+
+def test_build_agent_always_hides_the_connection_user_and_host(tmp_path):
+    from wardn.config import Config, TargetConfig
+    from wardn.redact import RedactionRules
+
+    target = TargetConfig("lab", "nas.lan", "deploy", tmp_path / "key")
+    config = Config(
+        model="m",
+        ollama_url="http://x",
+        audit_log=tmp_path / "audit.jsonl",
+        targets={"lab": target},
+        redact=RedactionRules(hostnames=("pve",), users=("admin",)),
+    )
+    agent = cli.build_agent(config, target, "m")
+
+    hidden = agent._redactor.redact("deploy admin pve nas.lan 203.0.113.7")
+    assert hidden == "<user-1> <user-2> <host-1> <host-2> <ip-1>"

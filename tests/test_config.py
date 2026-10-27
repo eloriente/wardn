@@ -99,3 +99,31 @@ def test_single_target_is_selected_automatically(tmp_path):
         write(tmp_path, '[targets.only]\nhost = "h"\nuser = "u"\nkey = "/k"\n')
     )
     assert config.select_target(None).name == "only"
+
+
+def test_redact_section(tmp_path):
+    text = (
+        '[targets.a]\nhost = "h"\nuser = "u"\nkey = "/k"\n'
+        '[redact]\nhostnames = ["pve"]\nusers = ["deploy"]\npaths = ["/mnt/private"]\n'
+    )
+    redact = load_config(write(tmp_path, text)).redact
+    assert (redact.hostnames, redact.users, redact.paths) == (
+        ("pve",),
+        ("deploy",),
+        ("/mnt/private",),
+    )
+
+
+def test_redact_is_optional(tmp_path):
+    config = load_config(
+        write(tmp_path, '[targets.a]\nhost = "h"\nuser = "u"\nkey = "/k"\n')
+    )
+    assert config.redact.hostnames == ()
+
+
+def test_invalid_redact_section(tmp_path):
+    text = (
+        '[targets.a]\nhost = "h"\nuser = "u"\nkey = "/k"\n[redact]\nusers = "deploy"\n'
+    )
+    with pytest.raises(ConfigError, match="'users' must be a list"):
+        load_config(write(tmp_path, text))

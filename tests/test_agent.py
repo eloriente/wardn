@@ -1,23 +1,11 @@
 import pytest
-from fakes import FakeTarget
+from fakes import FakeTarget, ScriptedClient
 
 from wardn.agent import MAX_TOOL_OUTPUT_CHARS, SYSTEM_PROMPT, Agent
 from wardn.ollama import ChatResponse, ToolCall
 from wardn.tools import ALL_TOOLS, DISK_USAGE, Tool
 
 DF = "Filesystem Size Used Avail Use% Mounted on\noverlay 59G 28G 28G 50% /\n"
-
-
-class ScriptedClient:
-    """Plays back a fixed list of responses and records what it was sent."""
-
-    def __init__(self, *responses):
-        self._responses = list(responses)
-        self.requests = []
-
-    def chat(self, messages, tools=None):
-        self.requests.append((list(messages), tools))
-        return self._responses.pop(0)
 
 
 def call(name="disk_usage", **arguments):
@@ -125,3 +113,55 @@ def test_several_tool_calls_in_one_turn_are_all_answered(target):
 
     roles = [m["role"] for m in client.requests[1][0]]
     assert roles == ["system", "user", "assistant", "tool", "tool"]
+
+
+LEAKY = Tool(
+    name="leaky",
+    description="Returns text with sensitive data.",
+    properties={},
+    required=(),
+    func=lambda target, arguments: "from 203.0.113.7 password=hunter2 file /etc/shadow",
+)
+
+
+def test_tool_output_is_hidden_before_the_model_sees_it(target):
+    client = ScriptedClient(call("leaky"), answer("done"))
+    Agent(client, target, (LEAKY,)).run("go")
+
+    seen = client.requests[1][0][-1]["content"]
+    assert seen == "from <ip-1> password=[REDACTED:secret] file <path-1>"
+
+
+def test_the_answer_is_hidden_too(target):
+    client = ScriptedClient(answer("Your server is 203.0.113.7, password=hunter2"))
+    result = Agent(client, target, ALL_TOOLS).run("who am I?")
+
+    assert result.answer == "Your server is <ip-1>, password=[REDACTED:secret]"
+    assert "203.0.113.7" not in str(result.messages)
+
+
+def test_aliases_are_stable_within_a_conversation_and_reset_after(target):
+    client = ScriptedClient(call("leaky"), answer("ok"), call("leaky"), answer("ok"))
+    agent = Agent(client, target, (LEAKY,))
+    agent.run("one")
+    agent.run("two")
+    first = client.requests[1][0][-1]["content"]
+    second = client.requests[3][0][-1]["content"]
+    assert first == second  # numbering starts over for each question
+
+
+def test_redactions_are_noted_in_the_audit_log_without_the_values(target):
+    client = ScriptedClient(call("leaky"), answer("done"))
+    Agent(client, target, (LEAKY,)).run("go")
+
+    (event,) = [e for e in target.audit.events if e["event"] == "redaction"]
+    assert event["source"] == "leaky"
+    assert event["counts"] == {"ip": 1, "secret": 1, "path": 1}
+    assert "203.0.113.7" not in str(target.audit.events)
+    assert "hunter2" not in str(target.audit.events)
+
+
+def test_nothing_is_logged_when_nothing_was_hidden(target):
+    client = ScriptedClient(call(), answer("ok"))
+    Agent(client, target, ALL_TOOLS).run("disks?")
+    assert [e for e in target.audit.events if e["event"] == "redaction"] == []

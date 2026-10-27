@@ -53,3 +53,15 @@ def test_jsonl_log_appends_one_line_per_event(tmp_path):
 @pytest.fixture
 def target():
     return FakeTarget()
+
+
+def test_jsonl_log_is_only_readable_by_its_owner(tmp_path):
+    path = tmp_path / "state" / "audit.jsonl"
+    JsonlAuditLog(path).record({"status": "executed"})
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_command_events_are_marked_as_such(target):
+    target.run(["df", "-h"])
+    assert target.audit.events[0]["event"] == "command"

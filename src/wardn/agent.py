@@ -1,16 +1,17 @@
 """The agent loop: ask the model, run the tools it requests, repeat."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
+from wardn.audit import timestamp
 from wardn.ollama import ChatResponse
+from wardn.redact import Redactor
 from wardn.target import Target
 from wardn.tools import Tool
 
 SYSTEM_PROMPT = (
     "You are Wardn, an assistant that watches over a homelab server. "
     "Use the tools to inspect the server. "
-    "If you need more information, call a tool right away; never say you will do it later. "
     "Answer briefly and only from what the tools returned."
 )
 
@@ -41,20 +42,38 @@ class Agent:
         target: Target,
         tools: tuple[Tool, ...],
         max_iterations: int = 5,
+        redactor: Redactor | None = None,
     ):
         self._client = client
         self._target = target
         self._tools = {tool.name: tool for tool in tools}
         self._schemas = [tool.schema() for tool in tools]
         self._max_iterations = max_iterations
+        self._redactor = redactor or Redactor()
+
+    def _hide(self, text: str, source: str) -> str:
+        """Hide sensitive data, and note in the audit log how much was hidden."""
+        text = self._redactor.redact(text)
+        if counts := self._redactor.drain():
+            self._target.audit.record(
+                {
+                    "ts": timestamp(),
+                    "event": "redaction",
+                    "source": source,
+                    "counts": dict(counts),
+                }
+            )
+        return text
 
     def run(self, question: str) -> AgentResult:
+        self._redactor.reset()  # aliases such as <ip-1> belong to one conversation
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": question},
         ]
         for iteration in range(1, self._max_iterations + 1):
             response = self._client.chat(messages, tools=self._schemas)
+            response = replace(response, content=self._hide(response.content, "model"))
             messages.append(response.as_message())
 
             if not response.tool_calls:
@@ -74,7 +93,8 @@ class Agent:
         if tool is None:
             # Text, not an exception: the model can read it and try again.
             return f"error: unknown tool {name!r}. Available: {sorted(self._tools)}"
-        output = tool.call(self._target, arguments)
+        # What the model sees is hidden first, then cut: a placeholder is never split.
+        output = self._hide(tool.call(self._target, arguments), name)
         if len(output) > MAX_TOOL_OUTPUT_CHARS:
             output = output[:MAX_TOOL_OUTPUT_CHARS] + "\n... (truncated)"
         return output

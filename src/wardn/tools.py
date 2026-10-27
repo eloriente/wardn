@@ -193,8 +193,8 @@ def _service_status(target: Target, arguments: dict[str, Any]) -> str:
 SERVICE_STATUS = Tool(
     name="service_status",
     description=(
-        "Show whether a systemd service of the host is running, and its recent "
-        "log lines. Not for Docker containers."
+        "Show the state of one systemd service of the host and its recent log "
+        "lines, which explain why it failed. Not for Docker containers."
     ),
     properties={
         "unit": {
@@ -241,8 +241,8 @@ def _failed_services(target: Target, arguments: dict[str, Any]) -> str:
 FAILED_SERVICES = Tool(
     name="failed_services",
     description=(
-        "List the systemd services of the host that have failed. "
-        "Use it to check whether anything is broken."
+        "List the names of the systemd services of the host that have failed. "
+        "It does not say why: use service_status on a unit for the cause."
     ),
     properties={},
     required=(),

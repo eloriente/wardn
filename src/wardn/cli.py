@@ -1,13 +1,25 @@
 """The `wardn` command: ask the agent questions about a server."""
 
 import argparse
+import ipaddress
 import sys
 from pathlib import Path
 
 from wardn.agent import Agent, AgentResult
 from wardn.audit import JsonlAuditLog
-from wardn.config import Config, ConfigError, TargetConfig, load_config
+from wardn.config import (
+    DEFAULT_MODEL,
+    DEFAULT_OLLAMA_URL,
+    Config,
+    ConfigError,
+    ConfigNotFound,
+    TargetConfig,
+    load_config,
+)
+from wardn.evals import evaluate, format_report
 from wardn.ollama import OllamaClient, OllamaError
+from wardn.redact import RedactionRules, Redactor
+from wardn.scenarios import select_scenarios
 from wardn.ssh_target import SSHTarget
 from wardn.target import DEFAULT_RULES, Allowlist
 from wardn.tools import ALL_TOOLS
@@ -25,7 +37,24 @@ def build_agent(config: Config, target: TargetConfig, model: str) -> Agent:
         key_path=target.key,
         port=target.port,
     )
-    return Agent(OllamaClient(model, base_url=config.ollama_url), ssh, tools)
+    # The user and host we connect with are always hidden, besides what the
+    # config lists. An IP address is already caught by its pattern.
+    rules = RedactionRules(
+        hostnames=config.redact.hostnames
+        + (() if _is_ip(target.host) else (target.host,)),
+        users=config.redact.users + (target.user,),
+        paths=config.redact.paths,
+    )
+    client = OllamaClient(model, base_url=config.ollama_url)
+    return Agent(client, ssh, tools, redactor=Redactor(rules))
+
+
+def _is_ip(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return True
 
 
 def format_trace(result: AgentResult) -> str:
@@ -90,11 +119,58 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     ask_parser = commands.add_parser("ask", help="ask one question and exit")
     ask_parser.add_argument("question", nargs="+")
     commands.add_parser("chat", help="ask several questions interactively")
+    eval_parser = commands.add_parser(
+        "eval",
+        help="run the eval scenarios and measure how often the agent gets them right",
+    )
+    eval_parser.add_argument(
+        "scenarios", nargs="*", help="scenarios to run (default: all)"
+    )
+    eval_parser.add_argument(
+        "--runs", type=int, default=5, help="runs per scenario (default: 5)"
+    )
     return parser.parse_args(argv)
+
+
+def _progress(name: str, run: int, runs: int) -> None:
+    print(f"\r{name} ({run}/{runs})".ljust(60), end="", file=sys.stderr, flush=True)
+
+
+def run_evals(args: argparse.Namespace) -> int:
+    """Evals use scripted servers, so no target is needed, and a config is optional."""
+    model, url = DEFAULT_MODEL, DEFAULT_OLLAMA_URL
+    try:
+        config = load_config(args.config)
+        model, url = config.model, config.ollama_url
+    except ConfigNotFound:
+        pass
+    except ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    model = args.model or model
+
+    try:
+        scenarios = select_scenarios(args.scenarios)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        results = evaluate(
+            scenarios, OllamaClient(model, base_url=url), args.runs, _progress
+        )
+    except OllamaError as exc:
+        print(f"\nerror: {exc}", file=sys.stderr)
+        return 1
+    print("\r".ljust(60), end="\r", file=sys.stderr)
+    print(format_report(results, model, args.runs, args.verbose))
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.command == "eval":
+        return run_evals(args)
     try:
         config = load_config(args.config)
         target = config.select_target(args.target)

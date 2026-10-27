@@ -4,10 +4,11 @@ The file holds no secrets, only the path to each SSH key.
 """
 
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from wardn.redact import RedactionRules
 from wardn.tools import ALL_TOOLS
 
 DEFAULT_CONFIG_PATH = Path("~/.config/wardn/config.toml")
@@ -18,6 +19,10 @@ DEFAULT_AUDIT_LOG = Path("~/.local/state/wardn/audit.jsonl")
 
 class ConfigError(Exception):
     """The configuration file is missing or invalid."""
+
+
+class ConfigNotFound(ConfigError):
+    """There is no configuration file at the expected path."""
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,7 @@ class Config:
     audit_log: Path
     targets: dict[str, TargetConfig]
     default_target: str | None = None
+    redact: RedactionRules = field(default_factory=RedactionRules)
 
     def select_target(self, name: str | None) -> TargetConfig:
         name = name or self.default_target
@@ -92,12 +98,25 @@ def _parse_target(name: str, table: Any) -> TargetConfig:
     )
 
 
+def _parse_redact(table: Any) -> RedactionRules:
+    where = "[redact]"
+    if not isinstance(table, dict):
+        raise ConfigError(f"{where}: must be a table")
+    lists = {}
+    for key in ("hostnames", "users", "paths"):
+        values = table.get(key, [])
+        if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
+            raise ConfigError(f"{where}: '{key}' must be a list of strings")
+        lists[key] = tuple(values)
+    return RedactionRules(**lists)
+
+
 def load_config(path: Path | None = None) -> Config:
     path = (path or DEFAULT_CONFIG_PATH).expanduser()
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        raise ConfigError(
+        raise ConfigNotFound(
             f"config not found at {path}. Copy config.example.toml there and edit it."
         ) from None
     except (OSError, tomllib.TOMLDecodeError) as exc:
@@ -122,4 +141,5 @@ def load_config(path: Path | None = None) -> Config:
         ).expanduser(),
         targets=targets,
         default_target=default_target,
+        redact=_parse_redact(data.get("redact", {})),
     )

@@ -6,6 +6,14 @@ model = "qwen3:4b-instruct"
 # audit_log = "~/.local/state/wardn/audit.jsonl"
 default_target = "sandbox"
 
+# Hidden from the model and from its answers. Always hidden: secrets (passwords,
+# tokens, keys), IP and MAC addresses, sensitive paths (/home, /etc, /root...),
+# and the user and host each target connects with. List more here:
+[redact]
+hostnames = []  # names of your machines, for example ["my-server"]
+users = []  # other account names that appear in logs
+paths = []  # more path prefixes to hide, for example ["/mnt/private"]
+
 [targets.sandbox]
 host = "127.0.0.1"
 port = 2222

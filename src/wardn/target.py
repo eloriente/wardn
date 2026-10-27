@@ -9,9 +9,8 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
-from wardn.audit import AuditLog
+from wardn.audit import AuditLog, timestamp
 
 
 class CommandNotAllowed(Exception):
@@ -69,6 +68,10 @@ class Target(ABC):
         self._allowlist = allowlist
         self._audit = audit
 
+    @property
+    def audit(self) -> AuditLog:
+        return self._audit
+
     def run(self, argv: Sequence[str]) -> CommandResult:
         # The check and the audit live here, not in subclasses, so neither
         # can be skipped. Every attempt is recorded, including rejected ones.
@@ -93,7 +96,8 @@ class Target(ABC):
     def _record(self, argv, status: str, started: float, **extra) -> None:
         self._audit.record(
             {
-                "ts": datetime.now(UTC).isoformat(),
+                "ts": timestamp(),
+                "event": "command",
                 "argv": argv,
                 "status": status,
                 "duration_ms": round((time.monotonic() - started) * 1000),
