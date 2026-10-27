@@ -178,8 +178,9 @@ def _service_status(target: Target, arguments: dict[str, Any]) -> str:
         # Say only what we know: a service may run outside systemd (a container).
         return (
             f"{unit}: no systemd unit with that name "
-            "(the service may run elsewhere, for example in a container; "
-            "or its name differs: list the running services to find the exact one)"
+            "(the service may run elsewhere, for example in a container or as a "
+            "guest of a Proxmox host; or its name differs: list the running "
+            "services to find the exact one)"
         )
 
     lines = [line.strip() for line in result.stdout.splitlines()]
@@ -203,7 +204,8 @@ SERVICE_STATUS = Tool(
     name="service_status",
     description=(
         "Show the state of one systemd service of the host and its recent log "
-        "lines, which explain why it failed. Not for Docker containers."
+        "lines, which explain why it failed. Not for Docker containers, nor for "
+        "the LXC containers and virtual machines of a Proxmox host: those are guests."
     ),
     properties={
         "unit": {
@@ -445,7 +447,9 @@ def guest_status_tool(source: GuestSource) -> Tool:
         name="guest_status",
         description=(
             "List the guests (LXC containers and virtual machines) that Proxmox "
-            "runs, whether each one is running, and how much CPU, RAM and disk it uses."
+            "runs, whether each one is running, and how much CPU, RAM and disk it uses. "
+            "Use it to know whether an app or machine such as a media server is "
+            "running: on a Proxmox host they are guests, not systemd services."
         ),
         properties={},
         required=(),

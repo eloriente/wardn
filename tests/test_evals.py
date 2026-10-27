@@ -241,3 +241,27 @@ def test_spanish_scenarios_send_the_language_to_the_model():
     client = ScriptedClient(ChatResponse("radarr se reinicia en el servidor."))
     evaluate([s], client, runs=1)
     assert "Always answer in Spanish" in client.requests[0][0][0]["content"]
+
+
+def test_the_plex_guest_scenario_fails_when_the_model_stops_at_service_status():
+    s = next(s for s in SCENARIOS if s.name == "plex_is_a_guest_of_the_proxmox_host")
+    client = ScriptedClient(
+        ChatResponse("", [ToolCall("service_status", {"unit": "plex.service"})]),
+        ChatResponse("Plex is not installed on this server."),
+    )
+    (result,) = evaluate([s], client, runs=1)
+    assert result.outcomes[0].failures == [
+        "did not call guest_status",
+        "answer has none of ['running']",
+        "answer contains 'not installed'",
+    ]
+
+
+def test_the_plex_guest_scenario_passes_when_the_model_asks_proxmox():
+    s = next(s for s in SCENARIOS if s.name == "plex_is_a_guest_of_the_proxmox_host")
+    client = ScriptedClient(
+        ChatResponse("", [ToolCall("guest_status", {})]),
+        ChatResponse("Yes, plex is running."),
+    )
+    (result,) = evaluate([s], client, runs=1)
+    assert result.passed == 1

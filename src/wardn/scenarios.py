@@ -272,6 +272,36 @@ SCENARIOS = (
         forbid=("not running", "isn't running"),
     ),
     Scenario(
+        # The host has no plex.service: Plex is a guest. `systemctl status` says
+        # "not found", and the model must not stop there.
+        name="plex_is_a_guest_of_the_proxmox_host",
+        question="Is plex running?",
+        responses={status("plex.service"): NO_UNIT},
+        guests=GUESTS,
+        tools=HOST_TOOLS,
+        expect_tools=("guest_status",),
+        expect_any=("running",),
+        forbid=("not installed", "isn't installed", "not running", "isn't running"),
+    ),
+    Scenario(
+        name="plex_is_a_guest_in_spanish",
+        question="¿Funciona plex?",
+        responses={status("plex.service"): NO_UNIT},
+        guests=GUESTS,
+        tools=HOST_TOOLS,
+        language="Spanish",
+        expect_tools=("guest_status",),
+        expect_any=("funciona", "funcionando", "en ejecución", "running", "activo"),
+        forbid=(
+            "no funciona",
+            "no está funcionando",
+            "no se encuentra",
+            "no existe",
+            "no está instalado",
+            *ENGLISH_WORDS,
+        ),
+    ),
+    Scenario(
         name="finds_stopped_guest",
         question="Is any of my machines stopped?",
         responses={},
